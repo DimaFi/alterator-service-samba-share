@@ -71,5 +71,5 @@ fi
 # test and reboot
 testparm -s
 systemctl restart smb.service
-echo "Samba перезапущена."
+echo "x``xSamba перезапущена."
 
