@@ -1,0 +1,314 @@
+#!/bin/bash
+
+export SYSTEMD_PAGER=
+export LC_ALL=C
+set -o pipefail
+
+LOG_FILE="/var/log/samba-shares.log"
+exec 3>>"$LOG_FILE"
+
+log() {
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [PID:$$] $1" >&3
+}
+
+error() {
+  log "ERROR: $1"
+  echo "{\"status\": \"error\", \"message\": \"$1\"}"
+  release_lock
+  exit 1
+}
+
+acquire_lock() {
+  exec 9>/var/lock/samba-shares.lock
+  flock -n 9 || error "Другая операция уже выполняется"
+  trap 'release_lock' EXIT
+}
+
+release_lock() {
+  flock -u 9
+  rm -f /var/lock/samba-shares.lock
+}
+
+manage_service() {
+  local action=$1
+  local service=$2
+  log "Выполняем: systemctl $action $service"
+  
+  if ! timeout 15 systemctl "$action" "$service" >> "$LOG_FILE" 2>&1; then
+    error "Не удалось выполнить $action для $service"
+  fi
+}
+
+get_samba_shares() {
+  testparm -s | awk '
+    BEGIN {
+      print "["
+      first = 1
+    }
+    /^\[.*\]$/ {
+      share = substr($0, 2, length($0)-2)
+      path = ""
+      writable = ""
+      next
+    }
+    /^[[:space:]]*path[[:space:]]*=/ {
+      # Берём всё, что после знака "=" с удалением пробелов
+      sub(/^[[:space:]]*path[[:space:]]*=[[:space:]]*/, "")
+      path = $0
+      next
+    }
+    /^[[:space:]]*writable[[:space:]]*=/ {
+      sub(/^[[:space:]]*writable[[:space:]]*=[[:space:]]*/, "")
+      writable = $0
+      next
+    }
+    /^\s*$/ {
+      if (share != "" && path != "") {
+        if (!first) { printf(",\n") }
+        else { first=0 }
+
+        # В awk нет тернарного оператора, используем if
+        access_type = "ro"
+        if (writable == "yes") access_type = "rw"
+
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\"}", share, path, access_type)
+      }
+      share = ""
+      path = ""
+      writable = ""
+    }
+    END {
+      if (share != "" && path != "") {
+        if (!first) { printf(",\n") }
+        access_type = "ro"
+        if (writable == "yes") access_type = "rw"
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\"}", share, path, access_type)
+      }
+      print "\n]"
+    }
+  '
+}
+
+
+log "--- Запуск скрипта ---"
+acquire_lock
+
+if [[ "$EUID" -ne 0 ]]; then
+  error "Root required" 
+fi
+
+# Читаем JSON из stdin
+read -t 10 -r input || {
+  log "Таймаут при чтении входных данных"
+  input="{}"
+}
+log "Получены входные данные: $input"
+
+# Получаем действие (обязательно)
+action=$(echo "$input" | jq -r '.mode // empty' | tr 'A-Z' 'a-z')
+
+if [[ -z "$action" ]]; then
+  log "Не указано поле 'mode', пробуем использовать первый аргумент"
+  action=$(echo "$1" | tr 'A-Z' 'a-z')
+fi
+
+if [[ -z "$action" ]]; then
+  error "Не указано поле 'mode' во входных данных и не передан аргумент"
+fi
+
+# Получаем параметры
+share_name=$(echo "$input" | jq -r '.share_name // empty')
+share_path=$(echo "$input" | jq -r '.share_path // empty')
+access_user=$(echo "$input" | jq -r '.access_user // empty')
+access_type=$(echo "$input" | jq -r '.access_type // empty')
+
+
+
+
+case "$action" in
+  create)
+    log "Создание шары: $share_name по пути $share_path"
+
+    if [[ -z "$share_path" || -z "$share_name" || -z "$access_user" || -z "$access_type" ]]; then
+      error "Не заданы обязательные параметры для создания"
+    fi
+
+    mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
+    log "Каталог создан или уже существует"
+
+    chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
+    log "Права владельца изменены"
+
+    if [[ "$access_type" == "rw" ]]; then
+      chmod 2770 "$share_path" || error "Не удалось установить права 2770"
+      writable="yes"
+      log "Установлены права на чтение/запись"
+    else
+      chmod 2750 "$share_path" || error "Не удалось установить права 2750"
+      writable="no"
+      log "Установлены права только на чтение"
+    fi
+
+    if grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
+      error "Шара [$share_name] уже существует"
+    fi
+
+    TEMP_FILE=$(mktemp)
+    cp /etc/samba/smb.conf "$TEMP_FILE"
+
+    cat <<EOF >> "$TEMP_FILE"
+
+[$share_name]
+   path = $share_path
+   browsable = yes
+   writable = $writable
+   guest ok = no
+   valid users = $access_user
+EOF
+
+    log "Проверка конфигурации Samba"
+    if ! testparm -s "$TEMP_FILE" >/dev/null; then
+      rm -f "$TEMP_FILE"
+      error "Ошибка в конфигурации smb.conf"
+    fi
+
+    mv "$TEMP_FILE" /etc/samba/smb.conf
+    chmod 644 /etc/samba/smb.conf
+    log "Конфигурация smb.conf обновлена"
+
+    log "Перезапуск службы Samba"
+    manage_service restart smb.service
+
+    log "Шара успешно создана"
+    echo '{"status": "created"}'
+    ;;
+
+  delete)
+    if [[ -z "$share_name" || -z "$share_path" ]]; then
+      error "Не заданы обязательные параметры для удаления"
+    fi
+
+    log "Удаление шары: $share_name"
+    if ! grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
+      error "Шара [$share_name] не найдена в конфиге"
+    fi
+
+    sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
+    log "Конфигурация удалена из smb.conf"
+
+    if [[ -d "$share_path" ]]; then
+      rm -rf "$share_path"
+      log "Каталог $share_path удалён"
+    else
+      log "Каталог $share_path не найден, пропускаем удаление"
+    fi
+
+    manage_service restart smb.service
+
+    echo '{"status": "deleted"}'
+    ;;
+
+  deploy)
+    log "Начало развертывания Samba"
+
+    if ! command -v smbd >/dev/null || ! command -v nmbd >/dev/null; then
+      error "Samba не установлен (отсутствуют smbd/nmbd)"
+    fi
+
+    log "Активация служб SMB/NMB"
+    systemctl enable --now smb nmb &>> "$LOG_FILE" || {
+      log "Ошибка активации: systemctl exit code $?"
+      error "Не удалось активировать службы Samba"
+    }
+
+    if ! systemctl is-active smb nmb >/dev/null; then
+      error "Службы не перешли в активное состояние"
+    fi
+
+    if command -v alterator-announce >/dev/null; then
+      log "Отправка сигнала о развертывании"
+      alterator-announce "samba_shares" "deployed" || \
+      log "Предупреждение: не удалось отправить announce"
+    fi
+
+    log "Развертывание успешно завершено"
+    echo '{
+      "status": "deployed",
+      "state": "deployed",
+      "services": {
+        "smb": "'$(systemctl is-active smb)'",
+        "nmb": "'$(systemctl is-active nmb)'"
+      },
+      "message": "Samba успешно развернут"
+    }'
+    ;;
+
+  undeploy)
+    log "Остановка и отключение служб Samba"
+
+    manage_service stop smb.service
+    manage_service disable smb.service
+    manage_service stop nmb.service
+    manage_service disable nmb.service
+
+    log "Службы остановлены и отключены"
+    echo '{"status": "undeployed"}'
+    ;;
+
+  start)
+    log "Запуск службы smb.service"
+    manage_service start smb.service
+    shares_json=$(get_samba_shares)
+
+    echo "{\"status\":\"started\", \"shares\": $shares_json}"
+
+    return 0
+    ;;
+
+  stop)
+    log "Остановка службы smb.service"
+    manage_service stop smb.service
+    shares_json=$(get_samba_shares)
+    echo "{\"status\":\"stopped\", \"shares\": $shares_json}"
+    return 0
+    ;;
+
+  status)
+    smb_status=$(systemctl is-active smb.service)
+    nmb_status=$(systemctl is-active nmb.service)
+
+    if [[ "$smb_status" == "active" && "$nmb_status" == "active" ]]; then
+      state="deployed"
+      exit_code=128
+    elif [[ "$smb_status" == "active" || "$nmb_status" == "active" ]]; then
+      state="deployed"
+      exit_code=127
+    else
+      state="undeployed"
+      exit_code=0
+    fi
+
+    shares_json=$(get_samba_shares)
+
+    echo "{
+      \"status\": \"$state\",
+      \"state\": \"$state\",
+      \"services\": {
+        \"smb\": \"$smb_status\",
+        \"nmb\": \"$nmb_status\"
+      },
+      \"shares\": $shares_json
+    }"
+
+    exit $exit_code
+    ;;
+
+  *)
+    error "Неизвестное действие: $action"
+    ;;
+esac
+
+
+log "Скрипт успешно завершен"
+release_lock
+exit 0

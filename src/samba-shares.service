@@ -1,0 +1,114 @@
+type = "Service"
+name = "samba_shares"
+category = "X-Alterator-Servers"
+persistent = true
+
+display_name.en = "Samba Shares Service"
+display_name.ru = "Сервис общих папок Samba"
+
+comment.en = "Service for managing Samba shares"
+comment.ru = "Сервис для управления общими папками Samba"
+
+icon = "network-server"
+enable_force_deploy = true
+no_default_diag = true
+
+[parameters.share_name]
+display_name.en = "Share Name"
+display_name.ru = "Имя шары"
+comment.en = "Unique name of the Samba share"
+comment.ru = "Уникальное имя общей папки Samba"
+type = "string"
+context = ["configure", "backup", "restore"]
+required = ["configure"]
+
+[parameters.share_path]
+display_name.en = "Share Path"
+display_name.ru = "Путь к папке"
+comment.en = "Filesystem path to the shared folder"
+comment.ru = "Путь к каталогу, который будет расшарен"
+type = "string"
+context = ["configure", "backup", "restore"]
+required = ["configure"]
+
+[parameters.access_user]
+display_name.en = "Access User"
+display_name.ru = "Пользователь для доступа"
+comment.en = "User who will own the folder and have access"
+comment.ru = "Пользователь, которому принадлежит папка и который имеет доступ"
+type = "string"
+context = ["configure"]
+
+[parameters.access_type]
+display_name.en = "Access Type"
+display_name.ru = "Тип доступа"
+comment.en = "Access permission: read-only (ro) or read-write (rw)"
+comment.ru = "Тип доступа: только чтение (ro) или чтение и запись (rw)"
+type = "enum"
+values = ["ro", "rw"]
+default = "ro"
+context = ["configure"]
+
+[parameters.enabled]
+display_name.en = "Enabled"
+display_name.ru = "Включена"
+comment.en = "Enable or disable the share"
+comment.ru = "Включить или отключить общую папку"
+type = "boolean"
+default = true
+context = ["configure"]
+
+[resources.smb_conf]
+display_name.en = "Samba Configuration File"
+display_name.ru = "Конфигурационный файл Samba"
+comment.en = "Path to Samba smb.conf file"
+comment.ru = "Путь к конфигурационному файлу Samba smb.conf"
+type = "file"
+path.value = "/etc/samba/smb.conf"
+
+[resources.smb_service]
+display_name.en = "Samba service"
+display_name.ru = "Сервис Samba"
+comment.en = "Systemd service for Samba server"
+comment.ru = "Служба Samba в systemd"
+type = "systemd_unit"
+unit_name.value = "smb.service"
+
+[resources.nmb_service]
+display_name.en = "NetBIOS service"
+display_name.ru = "Сервис NetBIOS"
+comment.en = "Systemd service for NetBIOS name server"
+comment.ru = "Служба NetBIOS в systemd"
+type = "systemd_unit"
+unit_name.value = "nmb.service"
+
+[parameters.shares]
+display_name.en = "Samba Shares"
+display_name.ru = "Общие папки Samba"
+type = "array"
+array_type = "object"
+context = ["status"]
+required = ["status"]
+[parameters.shares.properties.share_name]
+display_name.en = "Share Name"
+display_name.ru = "Имя шары"
+type = "string"
+[parameters.shares.properties.share_path]
+display_name.en = "Share Path"
+display_name.ru = "Путь к папке"
+type = "string"
+[parameters.shares.properties.access_user]
+display_name.en = "Access User"
+display_name.ru = "Пользователь"
+type = "string"
+[parameters.shares.properties.access_type]
+display_name.en = "Access Type"
+display_name.ru = "Тип доступа"
+type = "enum"
+values = ["ro", "rw"]
+default = "ro"
+[parameters.shares.properties.enabled]
+display_name.en = "Enabled"
+display_name.ru = "Включена"
+type = "boolean"
+default = true

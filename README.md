@@ -23,9 +23,9 @@
 
 | Файл                 | Описание                                    | Путь                                 |
 |----------------------|---------------------------------------------|-------------------------------------|
-| Основной скрипт       | Скрипт управления Samba-шарами               | `/usr/bin/samba_share`            |
-| Backend-файл         | Вспомогательные функции и логика              | `/usr/share/alterator-service-samba/samba-share.backend` |
-| systemd unit-файл    | Сервис systemd для автоматического запуска скрипта | `/etc/systemd/system/samba-share.service`          |
+| Основной скрипт       | Скрипт управления Samba-шарами               | `/usr/bin/samba_shares`            |
+| Backend-файл         | Вспомогательные функции и логика              | `/usr/share/alterator-service-samba/samba-shares.backend` |
+| systemd unit-файл    | Сервис systemd для автоматического запуска скрипта | `/etc/systemd/system/samba-shares.service`          |
 | Лог-файл             | Журнал операций скрипта                       | `/var/log/samba-shares.log`          |
 | Файл блокировки      | Для исключения одновременного запуска операций | `/var/lock/samba-shares.lock`         |
 

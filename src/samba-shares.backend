@@ -1,0 +1,57 @@
+type = "Backend"
+module = "executor"
+interface = "service1"
+name = "samba_shares"
+persistent = true
+
+[methods.Info]
+execute = "cat /usr/share/alterator/service/samba-shares.service"
+action_id = "Info"
+stdout_bytes = true
+
+[methods.Deploy]
+execute = "/usr/bin/samba-shares deploy"
+stdin_string = true
+stdout_strings = true
+stdout_signal_name = "service_stdout_signal"
+stderr_signal_name = "service_stderr_signal"
+timeout = 600
+
+[methods.Undeploy]
+execute = "/usr/bin/samba-shares Undeploy"
+stdin_string = true
+stdout_strings = true
+stdout_signal_name = "service_stdout_signal"
+stderr_signal_name = "service_stderr_signal"
+timeout = 600
+
+[methods.Configure]
+execute = "bash /usr/bin/samba-shares Configure"
+stdin_string = true
+stdout_signal_name = "service_stdout_signal"
+stderr_signal_name = "service_stderr_signal"
+timeout = 600
+
+[methods.Start]
+execute = "/usr/bin/samba-shares Start"
+timeout = 600
+
+[methods.Stop]
+execute = "/usr/bin/samba-shares Stop"
+timeout = 600
+
+[methods.Backup]
+execute = "/usr/bin/samba-shares Backup"
+stdin_string = true
+timeout = 600
+
+[methods.Restore]
+execute = "/usr/bin/samba-shares Restore"
+stdin_string = true
+timeout = 600
+
+[methods.Status]
+execute = "/usr/bin/samba-shares Status"
+action_id = "Status"
+stdout_bytes = true
+stdout_json = true
