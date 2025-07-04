@@ -1,7 +1,6 @@
 type = "Service"
-name = "samba_shares"
+name = "service_samba_shares"
 category = "X-Alterator-Servers"
-persistent = true
 
 display_name.en = "Samba Shares Service"
 display_name.ru = "Сервис общих папок Samba"
@@ -9,7 +8,6 @@ display_name.ru = "Сервис общих папок Samba"
 comment.en = "Service for managing Samba shares"
 comment.ru = "Сервис для управления общими папками Samba"
 
-icon = "network-server"
 enable_force_deploy = true
 no_default_diag = true
 
@@ -26,13 +24,12 @@ required = ["configure"]
 
 [parameters.share_name]
 display_name.en = "Share Name"
-display_name.ru = "Имя шары"
+display_name.ru = "Имя общей папки"
 comment.en = "Unique name of the Samba share"
 comment.ru = "Уникальное имя общей папки Samba"
 type = "string"
 context = ["configure"]
 required = ["configure"]
-enum_by_status = { path = "shares[].share_name" }
 
 [parameters.share_path]
 display_name.en = "Share Path"
@@ -42,7 +39,6 @@ comment.ru = "Путь к каталогу, который будет расша
 type = "string"
 context = ["configure"]
 required = ["configure"]
-lookup = { from = "shares", key = "share_name", value = "share_path" }
 
 [parameters.access_user]
 display_name.en = "Access User"
@@ -51,7 +47,6 @@ comment.en = "User who will own the folder and have access"
 comment.ru = "Пользователь, которому принадлежит папка и который имеет доступ"
 type = "string"
 context = ["configure"]
-lookup = { from = "shares", key = "share_name", value = "access_user" }
 
 [parameters.access_type]
 display_name.en = "Access Type"
@@ -62,7 +57,6 @@ type = "enum"
 values = ["ro", "rw"]
 default = "ro"
 context = ["configure"]
-lookup = { from = "shares", key = "share_name", value = "access_type" }
 
 [parameters.allowed_users]
 display_name.en = "Allowed Users"
@@ -71,7 +65,6 @@ comment.en = "Comma-separated list of users allowed to access this share"
 comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
 context = ["configure"]
-lookup = { from = "shares", key = "share_name", value = "allowed_users" }
 
 [parameters.enabled]
 display_name.en = "Enabled"
@@ -81,7 +74,6 @@ comment.ru = "Включить или отключить общую папку"
 type = "boolean"
 default = true
 context = ["configure"]
-lookup = { from = "shares", key = "share_name", value = "enabled" }
 
 [resources.smb_conf]
 display_name.en = "Samba Configuration File"
@@ -116,7 +108,7 @@ context = ["status"]
 required = ["status"]
 [parameters.shares.properties.share_name]
 display_name.en = "Share Name"
-display_name.ru = "Имя шары"
+display_name.ru = "Имя общией папки"
 type = "string"
 [parameters.shares.properties.share_path]
 display_name.en = "Share Path"
@@ -141,3 +133,4 @@ default = true
 display_name.en = "Allowed Users"
 display_name.ru = "Разрешённые пользователи"
 type = "string"
+
