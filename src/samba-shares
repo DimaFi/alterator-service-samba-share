@@ -53,11 +53,11 @@ get_samba_shares() {
         access_type = "ro"
         if (tolower(writable) == "yes" || tolower(readonly) == "no") access_type = "rw"
 
-        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true}", share, path, access_type)
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true,\"allowed_users\":\"%s\"}", share, path, access_type, allowed_users)
       }
 
       share = substr($0, 2, length($0) - 2)
-      path = ""; writable = ""; readonly = ""
+      path = ""; writable = ""; readonly = ""; allowed_users = ""
       next
     }
 
@@ -79,6 +79,12 @@ get_samba_shares() {
       next
     }
 
+    /^[[:space:]]*valid users[[:space:]]*=/ {
+      sub(/^[[:space:]]*valid users[[:space:]]*=[[:space:]]*/, "")
+      allowed_users = $0
+      next
+    }
+
     /^\s*$/ {
       if (share != "" && path != "") {
         if (!first) printf(",\n"); else first = 0
@@ -86,10 +92,10 @@ get_samba_shares() {
         access_type = "ro"
         if (tolower(writable) == "yes" || tolower(readonly) == "no") access_type = "rw"
 
-        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true}", share, path, access_type)
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true,\"allowed_users\":\"%s\"}", share, path, access_type, allowed_users)
       }
 
-      share = ""; path = ""; writable = ""; readonly = ""
+      share = ""; path = ""; writable = ""; readonly = ""; allowed_users = ""
     }
 
     END {
@@ -99,7 +105,7 @@ get_samba_shares() {
         access_type = "ro"
         if (tolower(writable) == "yes" || tolower(readonly) == "no") access_type = "rw"
 
-        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true}", share, path, access_type)
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true,\"allowed_users\":\"%s\"}", share, path, access_type, allowed_users)
       }
 
       print "\n]"
@@ -410,6 +416,32 @@ EOF
   # Проверка доступности записи при rw
   if [[ "$access_type" == "rw" && ! -w "$share_path" ]]; then
     error "Папка $share_path недоступна для записи после обновления прав"
+  fi
+  ;;
+
+  backup)
+  backup_file="/var/lib/samba-shares/backup/smb.conf"
+
+  mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку для бэкапа"
+
+  if cp /etc/samba/smb.conf "$backup_file"; then
+    log "Конфигурация Samba сохранена в $backup_file"
+    echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
+  else
+    error "Не удалось создать бэкап"
+  fi
+  ;;
+
+  restore)
+  backup_file="/var/lib/samba-shares/backup/smb.conf"
+
+  if [[ -f "$backup_file" ]]; then
+    cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
+    systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
+    log "Конфигурация Samba восстановлена из $backup_file"
+    echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена\"}"
+  else
+    error "Бэкап не найден по пути $backup_file"
   fi
   ;;
 

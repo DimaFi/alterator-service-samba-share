@@ -32,7 +32,7 @@ comment.ru = "Уникальное имя общей папки Samba"
 type = "string"
 context = ["configure"]
 required = ["configure"]
-show_if = { operation = ["create", "delete", "update"] }
+enum_by_status = { path = "shares[].share_name" }
 
 [parameters.share_path]
 display_name.en = "Share Path"
@@ -42,7 +42,7 @@ comment.ru = "Путь к каталогу, который будет расша
 type = "string"
 context = ["configure"]
 required = ["configure"]
-show_if = { operation = ["create", "update"] }
+lookup = { from = "shares", key = "share_name", value = "share_path" }
 
 [parameters.access_user]
 display_name.en = "Access User"
@@ -51,7 +51,7 @@ comment.en = "User who will own the folder and have access"
 comment.ru = "Пользователь, которому принадлежит папка и который имеет доступ"
 type = "string"
 context = ["configure"]
-show_if = { operation = ["create", "update"] }
+lookup = { from = "shares", key = "share_name", value = "access_user" }
 
 [parameters.access_type]
 display_name.en = "Access Type"
@@ -62,7 +62,7 @@ type = "enum"
 values = ["ro", "rw"]
 default = "ro"
 context = ["configure"]
-show_if = { operation = ["create", "update"] }
+lookup = { from = "shares", key = "share_name", value = "access_type" }
 
 [parameters.allowed_users]
 display_name.en = "Allowed Users"
@@ -71,7 +71,7 @@ comment.en = "Comma-separated list of users allowed to access this share"
 comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
 context = ["configure"]
-show_if = { operation = ["create", "update"] }
+lookup = { from = "shares", key = "share_name", value = "allowed_users" }
 
 [parameters.enabled]
 display_name.en = "Enabled"
@@ -81,6 +81,7 @@ comment.ru = "Включить или отключить общую папку"
 type = "boolean"
 default = true
 context = ["configure"]
+lookup = { from = "shares", key = "share_name", value = "enabled" }
 
 [resources.smb_conf]
 display_name.en = "Samba Configuration File"
@@ -136,3 +137,7 @@ display_name.en = "Enabled"
 display_name.ru = "Включена"
 type = "boolean"
 default = true
+[parameters.shares.properties.allowed_users]
+display_name.en = "Allowed Users"
+display_name.ru = "Разрешённые пользователи"
+type = "string"
