@@ -13,14 +13,26 @@ icon = "network-server"
 enable_force_deploy = true
 no_default_diag = true
 
+[parameters.operation]
+display_name.en = "Operation"
+display_name.ru = "Операции"
+comment.en = "Choose the operation to perform: create, delete, update"
+comment.ru = "Выберите операцию: создать, удалить, изменить"
+type = "enum"
+values = ["create", "delete", "update"]
+default = "create"
+context = ["configure"]
+required = ["configure"]
+
 [parameters.share_name]
 display_name.en = "Share Name"
 display_name.ru = "Имя шары"
 comment.en = "Unique name of the Samba share"
 comment.ru = "Уникальное имя общей папки Samba"
 type = "string"
-context = ["configure", "backup", "restore"]
+context = ["configure"]
 required = ["configure"]
+show_if = { operation = ["create", "delete", "update"] }
 
 [parameters.share_path]
 display_name.en = "Share Path"
@@ -28,8 +40,9 @@ display_name.ru = "Путь к папке"
 comment.en = "Filesystem path to the shared folder"
 comment.ru = "Путь к каталогу, который будет расшарен"
 type = "string"
-context = ["configure", "backup", "restore"]
+context = ["configure"]
 required = ["configure"]
+show_if = { operation = ["create", "update"] }
 
 [parameters.access_user]
 display_name.en = "Access User"
@@ -38,6 +51,7 @@ comment.en = "User who will own the folder and have access"
 comment.ru = "Пользователь, которому принадлежит папка и который имеет доступ"
 type = "string"
 context = ["configure"]
+show_if = { operation = ["create", "update"] }
 
 [parameters.access_type]
 display_name.en = "Access Type"
@@ -48,6 +62,16 @@ type = "enum"
 values = ["ro", "rw"]
 default = "ro"
 context = ["configure"]
+show_if = { operation = ["create", "update"] }
+
+[parameters.allowed_users]
+display_name.en = "Allowed Users"
+display_name.ru = "Разрешённые пользователи"
+comment.en = "Comma-separated list of users allowed to access this share"
+comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
+type = "string"
+context = ["configure"]
+show_if = { operation = ["create", "update"] }
 
 [parameters.enabled]
 display_name.en = "Enabled"

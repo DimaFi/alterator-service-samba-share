@@ -40,50 +40,68 @@ manage_service() {
 }
 
 get_samba_shares() {
-  testparm -s | awk '
+  testparm -s 2>/dev/null | awk '
     BEGIN {
       print "["
       first = 1
     }
+
     /^\[.*\]$/ {
-      share = substr($0, 2, length($0)-2)
-      path = ""
-      writable = ""
+      if (share != "" && path != "") {
+        if (!first) printf(",\n"); else first = 0
+
+        access_type = "ro"
+        if (tolower(writable) == "yes" || tolower(readonly) == "no") access_type = "rw"
+
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true}", share, path, access_type)
+      }
+
+      share = substr($0, 2, length($0) - 2)
+      path = ""; writable = ""; readonly = ""
       next
     }
+
     /^[[:space:]]*path[[:space:]]*=/ {
-      # Берём всё, что после знака "=" с удалением пробелов
       sub(/^[[:space:]]*path[[:space:]]*=[[:space:]]*/, "")
       path = $0
       next
     }
+
     /^[[:space:]]*writable[[:space:]]*=/ {
       sub(/^[[:space:]]*writable[[:space:]]*=[[:space:]]*/, "")
       writable = $0
       next
     }
+
+    /^[[:space:]]*read only[[:space:]]*=/ {
+      sub(/^[[:space:]]*read only[[:space:]]*=[[:space:]]*/, "")
+      readonly = $0
+      next
+    }
+
     /^\s*$/ {
       if (share != "" && path != "") {
-        if (!first) { printf(",\n") }
-        else { first=0 }
+        if (!first) printf(",\n"); else first = 0
 
-        # В awk нет тернарного оператора, используем if
         access_type = "ro"
-        if (writable == "yes") access_type = "rw"
+        if (tolower(writable) == "yes" || tolower(readonly) == "no") access_type = "rw"
 
-        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\"}", share, path, access_type)
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true}", share, path, access_type)
       }
-      share = ""
-      path = ""
-      writable = ""
+
+      share = ""; path = ""; writable = ""; readonly = ""
     }
+
     END {
       if (share != "" && path != "") {
-        if (!first) { printf(",\n") }
+        if (!first) printf(",\n")
+
         access_type = "ro"
-        if (writable == "yes") access_type = "rw"
-        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\"}", share, path, access_type)
+        if (tolower(writable) == "yes" || tolower(readonly) == "no") access_type = "rw"
+
+        printf("  {\"share_name\":\"%s\",\"share_path\":\"%s\",\"access_type\":\"%s\",\"access_user\":\"\",\"enabled\":true}", share, path, access_type)
       }
+
       print "\n]"
     }
   '
@@ -105,7 +123,8 @@ read -t 10 -r input || {
 log "Получены входные данные: $input"
 
 # Получаем действие (обязательно)
-action=$(echo "$input" | jq -r '.mode // empty' | tr 'A-Z' 'a-z')
+# action=$(echo "$input" | jq -r '.mode // empty' | tr 'A-Z' 'a-z')
+action=$(echo "$input" | jq -r '.operation // empty' | tr 'A-Z' 'a-z')
 
 if [[ -z "$action" ]]; then
   log "Не указано поле 'mode', пробуем использовать первый аргумент"
@@ -121,67 +140,92 @@ share_name=$(echo "$input" | jq -r '.share_name // empty')
 share_path=$(echo "$input" | jq -r '.share_path // empty')
 access_user=$(echo "$input" | jq -r '.access_user // empty')
 access_type=$(echo "$input" | jq -r '.access_type // empty')
+allowed_users=$(echo "$input" | jq -r '.allowed_users // empty')
 
 
 
 
 case "$action" in
-  create)
-    log "Создание шары: $share_name по пути $share_path"
+create)
+  log "Создание шары: $share_name по пути $share_path"
 
-    if [[ -z "$share_path" || -z "$share_name" || -z "$access_user" || -z "$access_type" ]]; then
-      error "Не заданы обязательные параметры для создания"
-    fi
+  if [[ -z "$share_path" || -z "$share_name" || -z "$access_user" || -z "$access_type" ]]; then
+    error "Не заданы обязательные параметры для создания"
+  fi
 
-    mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
-    log "Каталог создан или уже существует"
+  mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
+  log "Каталог создан или уже существует"
 
-    chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
-    log "Права владельца изменены"
 
-    if [[ "$access_type" == "rw" ]]; then
-      chmod 2770 "$share_path" || error "Не удалось установить права 2770"
-      writable="yes"
-      log "Установлены права на чтение/запись"
-    else
-      chmod 2750 "$share_path" || error "Не удалось установить права 2750"
-      writable="no"
-      log "Установлены права только на чтение"
-    fi
 
-    if grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
-      error "Шара [$share_name] уже существует"
-    fi
+  chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
+  log "Права владельца изменены"
 
-    TEMP_FILE=$(mktemp)
-    cp /etc/samba/smb.conf "$TEMP_FILE"
+  # Удалим возможные ACL (если setfacl доступен)
+  if command -v setfacl >/dev/null; then
+    setfacl -b "$share_path" 2>/dev/null || log "Не удалось сбросить ACL для $share_path"
+  fi
 
-    cat <<EOF >> "$TEMP_FILE"
+  # Установка прав и запись-флага
+  if [[ "$access_type" == "rw" ]]; then
+    chmod 2770 "$share_path" || error "Не удалось установить права 2770"
+    writable="yes"
+    log "Установлены права на чтение/запись"
+  else
+    chmod 2750 "$share_path" || error "Не удалось установить права 2750"
+    writable="no"
+    log "Установлены права только на чтение"
+  fi
+
+  # Показываем текущие права
+  log "Права на каталог: $(ls -ld "$share_path")"
+
+  # Проверка на возможность записи, если это rw
+  if [[ "$access_type" == "rw" && ! -w "$share_path" ]]; then
+    error "Папка $share_path недоступна для записи после установки прав"
+  fi
+
+
+  if grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
+    error "Шара [$share_name] уже существует"
+  fi
+
+  # Формируем valid users (если allowed_users пустой, то будет просто access_user)
+  valid_users="$access_user"
+  if [[ -n "$allowed_users" && "$allowed_users" != "null" ]]; then
+    valid_users="$allowed_users"
+  fi
+
+  TEMP_FILE=$(mktemp)
+  cp /etc/samba/smb.conf "$TEMP_FILE"
+
+  cat <<EOF >> "$TEMP_FILE"
 
 [$share_name]
    path = $share_path
    browsable = yes
    writable = $writable
    guest ok = no
-   valid users = $access_user
+   valid users = $valid_users
 EOF
 
-    log "Проверка конфигурации Samba"
-    if ! testparm -s "$TEMP_FILE" >/dev/null; then
-      rm -f "$TEMP_FILE"
-      error "Ошибка в конфигурации smb.conf"
-    fi
+  log "Проверка конфигурации Samba"
+  if ! testparm -s "$TEMP_FILE" >/dev/null; then
+    rm -f "$TEMP_FILE"
+    error "Ошибка в конфигурации smb.conf"
+  fi
 
-    mv "$TEMP_FILE" /etc/samba/smb.conf
-    chmod 644 /etc/samba/smb.conf
-    log "Конфигурация smb.conf обновлена"
+  mv "$TEMP_FILE" /etc/samba/smb.conf
+  chmod 644 /etc/samba/smb.conf
+  log "Конфигурация smb.conf обновлена"
 
-    log "Перезапуск службы Samba"
-    manage_service restart smb.service
+  log "Перезапуск службы Samba"
+  manage_service restart smb.service
 
-    log "Шара успешно создана"
-    echo '{"status": "created"}'
-    ;;
+  log "Шара успешно создана"
+  echo '{"status": "created"}'
+  ;;
+
 
   delete)
     if [[ -z "$share_name" || -z "$share_path" ]]; then
@@ -302,6 +346,72 @@ EOF
 
     exit $exit_code
     ;;
+
+  update)
+  if [[ -z "$share_name" ]]; then
+    error "Не указано имя шары для обновления"
+  fi
+
+  if [[ -z "$share_path" || -z "$access_user" || -z "$access_type" ]]; then
+    error "Недостаточно параметров для обновления"
+  fi
+
+  log "Обновление шары: $share_name"
+
+  # Удаляем старую секцию из smb.conf
+  sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
+  log "Удалена старая конфигурация шары $share_name"
+
+  # Определяем список валидных пользователей для шары
+  valid_users="$access_user"
+  if [[ -n "$allowed_users" && "$allowed_users" != "null" ]]; then
+    valid_users="$allowed_users"
+  fi
+
+  writable="no"
+  if [[ "$access_type" == "rw" ]]; then writable="yes"; fi
+
+  cat <<EOF >> /etc/samba/smb.conf
+
+[$share_name]
+   path = $share_path
+   browsable = yes
+   writable = $writable
+   guest ok = no
+   valid users = $valid_users
+EOF
+
+  # Проверка корректности конфигурации
+  if ! testparm -s /etc/samba/smb.conf >/dev/null; then
+    error "Ошибка в конфигурации smb.conf после обновления"
+  fi
+
+  # Создаем каталог, если не существует
+  mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
+
+  # Устанавливаем владельца
+  chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
+
+  # Удалим возможные ACL (если setfacl доступен)
+  if command -v setfacl >/dev/null; then
+    setfacl -b "$share_path" 2>/dev/null || log "Не удалось сбросить ACL для $share_path"
+  fi
+
+  # Устанавливаем права
+  if [[ "$access_type" == "rw" ]]; then
+    chmod 2770 "$share_path" || error "Не удалось установить права 2770"
+  else
+    chmod 2750 "$share_path" || error "Не удалось установить права 2750"
+  fi
+
+  # Лог текущих прав
+  log "Права на каталог после обновления: $(ls -ld "$share_path")"
+
+  # Проверка доступности записи при rw
+  if [[ "$access_type" == "rw" && ! -w "$share_path" ]]; then
+    error "Папка $share_path недоступна для записи после обновления прав"
+  fi
+  ;;
 
   *)
     error "Неизвестное действие: $action"
