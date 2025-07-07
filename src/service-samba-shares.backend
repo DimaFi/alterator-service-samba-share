@@ -10,6 +10,7 @@ stdout_bytes = true
 
 [methods.Deploy]
 execute = "/usr/bin/service-samba-shares deploy"
+action_id = "Deploy"
 stdin_string = true
 stdout_strings = true
 stdout_signal_name = "service_stdout_signal"
@@ -17,7 +18,8 @@ stderr_signal_name = "service_stderr_signal"
 timeout = 600
 
 [methods.Undeploy]
-execute = "/usr/bin/service-samba-shares Undeploy"
+execute = "/usr/bin/service-samba-shares undeploy"
+action_id = "Undeploy"
 stdin_string = true
 stdout_strings = true
 stdout_signal_name = "service_stdout_signal"
@@ -25,32 +27,37 @@ stderr_signal_name = "service_stderr_signal"
 timeout = 600
 
 [methods.Configure]
-execute = "bash /usr/bin/service-samba-shares Configure"
+execute = "bash /usr/bin/service-samba-shares configure"
+action_id = "Configure"
 stdin_string = true
 stdout_signal_name = "service_stdout_signal"
 stderr_signal_name = "service_stderr_signal"
 timeout = 600
 
 [methods.Start]
-execute = "/usr/bin/service-samba-shares Start"
+execute = "/usr/bin/service-samba-shares start"
+action_id = "Start"
 timeout = 600
 
 [methods.Stop]
-execute = "/usr/bin/service-samba-shares Stop"
+execute = "/usr/bin/service-samba-shares stop"
+action_id = "Stop"
 timeout = 600
 
 [methods.Backup]
-execute = "/usr/bin/service-samba-shares Backup"
+execute = "/usr/bin/service-samba-shares backup"
+action_id = "Backup"
 stdin_string = true
 timeout = 600
 
 [methods.Restore]
-execute = "/usr/bin/service-samba-shares Restore"
+execute = "/usr/bin/service-samba-shares restore"
+action_id = "Restore"
 stdin_string = true
 timeout = 600
 
 [methods.Status]
-execute = "/usr/bin/service-samba-shares Status"
+execute = "/usr/bin/service-samba-shares status"
 action_id = "Status"
 stdout_bytes = true
 stdout_json = true

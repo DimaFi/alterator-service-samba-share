@@ -130,15 +130,15 @@ log "Получены входные данные: $input"
 
 # Получаем действие (обязательно)
 # action=$(echo "$input" | jq -r '.mode // empty' | tr 'A-Z' 'a-z')
-action=$(echo "$input" | jq -r '.operation // empty' | tr 'A-Z' 'a-z')
+action=$(echo "$input" | jq -r '.operation // empty')
 
 if [[ -z "$action" ]]; then
-  log "Не указано поле 'mode', пробуем использовать первый аргумент"
-  action=$(echo "$1" | tr 'A-Z' 'a-z')
+  log "Не указано поле 'opetation', пробуем использовать первый аргумент"
+  action=$(echo "$1")
 fi
 
 if [[ -z "$action" ]]; then
-  error "Не указано поле 'mode' во входных данных и не передан аргумент"
+  error "Не указано поле 'operation' во входных данных и не передан аргумент"
 fi
 
 # Получаем параметры
@@ -147,7 +147,6 @@ share_path=$(echo "$input" | jq -r '.share_path // empty')
 access_user=$(echo "$input" | jq -r '.access_user // empty')
 access_type=$(echo "$input" | jq -r '.access_type // empty')
 allowed_users=$(echo "$input" | jq -r '.allowed_users // empty')
-
 
 
 
@@ -282,15 +281,16 @@ EOF
     fi
 
     log "Развертывание успешно завершено"
-    echo '{
-      "status": "deployed",
-      "state": "deployed",
-      "services": {
-        "smb": "'$(systemctl is-active smb)'",
-        "nmb": "'$(systemctl is-active nmb)'"
+    echo "{
+      \"status\": \"deployed\",
+      \"state\": \"deployed\",
+      \"services\": {
+        \"smb\": \"$(systemctl is-active smb)\",
+        \"nmb\": \"$(systemctl is-active nmb)\"
       },
-      "message": "Samba успешно развернут"
-    }'
+      \"message\": \"Samba успешно развернут\"
+    }"
+
     ;;
 
   undeploy)
@@ -434,7 +434,7 @@ EOF
 
   restore)
   backup_file="/etc/samba/smb-b.conf"
-  
+
   if [[ -f "$backup_file" ]]; then
     cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
     systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
