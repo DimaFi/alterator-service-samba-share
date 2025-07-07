@@ -420,7 +420,7 @@ EOF
   ;;
 
   backup)
-  backup_file="/var/lib/samba-shares/backup/smb.conf"
+  backup_file="/etc/samba/smb-b.conf"
 
   mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку для бэкапа"
 
@@ -433,8 +433,8 @@ EOF
   ;;
 
   restore)
-  backup_file="/var/lib/samba-shares/backup/smb.conf"
-
+  backup_file="/etc/samba/smb-b.conf"
+  
   if [[ -f "$backup_file" ]]; then
     cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
     systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
