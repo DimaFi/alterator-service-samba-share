@@ -128,7 +128,10 @@ create_share() {
   user_group=$(id -gn "$access_user")
   chown -R "$access_user":"$user_group" "$share_path" || error "Не удалось изменить владельца"
 
-  command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
+  # command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -b "$share_path" 2>/dev/null || true
+  fi
 
   local writable="no"
   if [[ "$access_type" == "rw" ]]; then
@@ -191,7 +194,10 @@ deploy_samba() {
   systemctl enable --now smb nmb &>> "$LOG_FILE" || error "Не удалось активировать службы Samba"
   ! systemctl is-active smb nmb >/dev/null && error "Службы не перешли в активное состояние"
 
-  command -v alterator-announce >/dev/null && alterator-announce "samba_shares" "deployed" || true
+  # command -v alterator-announce >/dev/null && alterator-announce "samba_shares" "deployed" || true
+  if command -v alterator-announce >/dev/null 2>&1; then
+    alterator-announce "samba_shares" "deployed" || true
+  fi
 
   echo "{
     \"status\": \"deployed\",
@@ -282,9 +288,18 @@ EOF
   mkdir -p "$share_path"
   chown -R "$access_user":"users" "$share_path"
 
-  command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
+  # command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -b "$share_path" 2>/dev/null || true
+  fi
 
-  [[ "$access_type" == "rw" ]] && chmod 2770 "$share_path" || chmod 2750 "$share_path"
+  # [[ "$access_type" == "rw" ]] && chmod 2770 "$share_path" || chmod 2750 "$share_path"
+  if [[ "$access_type" == "rw" ]]; then
+    chmod 2770 "$share_path"
+  else
+    chmod 2750 "$share_path"
+  fi
+
 
   [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи"
 }
@@ -293,9 +308,14 @@ backup_config() {
   local backup_file="/etc/samba/smb-b.conf"
   mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку"
 
-  cp /etc/samba/smb.conf "$backup_file" && \
-    echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}" || \
+  # cp /etc/samba/smb.conf "$backup_file" && \
+  #   echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}" || \
+  #   error "Не удалось создать бэкап"
+  if cp /etc/samba/smb.conf "$backup_file"; then
+    echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
+  else
     error "Не удалось создать бэкап"
+  fi
 }
 
 restore_config() {
