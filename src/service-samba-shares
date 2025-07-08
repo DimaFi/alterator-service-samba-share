@@ -125,7 +125,8 @@ create_share() {
   fi
 
   mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
-  chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
+  user_group=$(id -gn "$access_user")
+  chown -R "$access_user":"$user_group" "$share_path" || error "Не удалось изменить владельца"
 
   command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
 
@@ -141,8 +142,13 @@ create_share() {
 
   grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Шара [$share_name] уже существует"
 
+  # local valid_users="$access_user"
+  # [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
   local valid_users="$access_user"
-  [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
+  if [[ -n "$allowed_users" && "$allowed_users" != "null" ]]; then
+    valid_users="$access_user,$allowed_users"
+  fi
+
 
   local TEMP_FILE
   TEMP_FILE=$(mktemp)
