@@ -5,10 +5,9 @@ export LC_ALL=C
 set -o pipefail
 
 LOG_FILE="/var/log/samba-shares.log"
-exec 3>>"$LOG_FILE"
 
 log() {
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [PID:$$] $1" >&3
+  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [PID:$$] $1" >> "$LOG_FILE"
 }
 
 error() {
@@ -16,7 +15,7 @@ error() {
   echo "{\"status\": \"error\", \"message\": \"$1\"}"
   release_lock
   exit 1
-}
+} 
 
 acquire_lock() {
   exec 9>/var/lock/samba-shares.lock
@@ -33,11 +32,12 @@ manage_service() {
   local action=$1
   local service=$2
   log "Выполняем: systemctl $action $service"
-  
+
   if ! timeout 15 systemctl "$action" "$service" >> "$LOG_FILE" 2>&1; then
     error "Не удалось выполнить $action для $service"
   fi
 }
+
 
 get_samba_shares() {
   testparm -s 2>/dev/null | awk '
@@ -113,45 +113,11 @@ get_samba_shares() {
   '
 }
 
+# ======= ФУНКЦИИ ДЛЯ КАЖДОГО ACTION =======
 
-log "--- Запуск скрипта ---"
-acquire_lock
+create_share() {
+  local share_name=$1 share_path=$2 access_user=$3 access_type=$4 allowed_users=$5
 
-if [[ "$EUID" -ne 0 ]]; then
-  error "Root required" 
-fi
-
-# Читаем JSON из stdin
-read -t 10 -r input || {
-  log "Таймаут при чтении входных данных"
-  input="{}"
-}
-log "Получены входные данные: $input"
-
-# Получаем действие (обязательно)
-# action=$(echo "$input" | jq -r '.mode // empty' | tr 'A-Z' 'a-z')
-action=$(echo "$input" | jq -r '.operation // empty')
-
-if [[ -z "$action" ]]; then
-  log "Не указано поле 'opetation', пробуем использовать первый аргумент"
-  action=$(echo "$1")
-fi
-
-if [[ -z "$action" ]]; then
-  error "Не указано поле 'operation' во входных данных и не передан аргумент"
-fi
-
-# Получаем параметры
-share_name=$(echo "$input" | jq -r '.share_name // empty')
-share_path=$(echo "$input" | jq -r '.share_path // empty')
-access_user=$(echo "$input" | jq -r '.access_user // empty')
-access_type=$(echo "$input" | jq -r '.access_type // empty')
-allowed_users=$(echo "$input" | jq -r '.allowed_users // empty')
-
-
-
-case "$action" in
-create)
   log "Создание шары: $share_name по пути $share_path"
 
   if [[ -z "$share_path" || -z "$share_name" || -z "$access_user" || -z "$access_type" ]]; then
@@ -159,48 +125,26 @@ create)
   fi
 
   mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
-  log "Каталог создан или уже существует"
-
-
-
   chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
-  log "Права владельца изменены"
 
-  # Удалим возможные ACL (если setfacl доступен)
-  if command -v setfacl >/dev/null; then
-    setfacl -b "$share_path" 2>/dev/null || log "Не удалось сбросить ACL для $share_path"
-  fi
+  command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
 
-  # Установка прав и запись-флага
+  local writable="no"
   if [[ "$access_type" == "rw" ]]; then
     chmod 2770 "$share_path" || error "Не удалось установить права 2770"
     writable="yes"
-    log "Установлены права на чтение/запись"
   else
     chmod 2750 "$share_path" || error "Не удалось установить права 2750"
-    writable="no"
-    log "Установлены права только на чтение"
   fi
 
-  # Показываем текущие права
-  log "Права на каталог: $(ls -ld "$share_path")"
+  [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи после установки прав"
 
-  # Проверка на возможность записи, если это rw
-  if [[ "$access_type" == "rw" && ! -w "$share_path" ]]; then
-    error "Папка $share_path недоступна для записи после установки прав"
-  fi
+  grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Шара [$share_name] уже существует"
 
+  local valid_users="$access_user"
+  [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
 
-  if grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
-    error "Шара [$share_name] уже существует"
-  fi
-
-  # Формируем valid users (если allowed_users пустой, то будет просто access_user)
-  valid_users="$access_user"
-  if [[ -n "$allowed_users" && "$allowed_users" != "null" ]]; then
-    valid_users="$allowed_users"
-  fi
-
+  local TEMP_FILE
   TEMP_FILE=$(mktemp)
   cp /etc/samba/smb.conf "$TEMP_FILE"
 
@@ -214,168 +158,108 @@ create)
    valid users = $valid_users
 EOF
 
-  log "Проверка конфигурации Samba"
-  if ! testparm -s "$TEMP_FILE" >/dev/null; then
-    rm -f "$TEMP_FILE"
-    error "Ошибка в конфигурации smb.conf"
-  fi
+  testparm -s "$TEMP_FILE" >/dev/null || { rm -f "$TEMP_FILE"; error "Ошибка в конфигурации smb.conf"; }
 
   mv "$TEMP_FILE" /etc/samba/smb.conf
   chmod 644 /etc/samba/smb.conf
-  log "Конфигурация smb.conf обновлена"
-
-  log "Перезапуск службы Samba"
   manage_service restart smb.service
 
-  log "Шара успешно создана"
   echo '{"status": "created"}'
-  ;;
+}
 
+delete_share() {
+  local share_name=$1 share_path=$2
 
-  delete)
-    if [[ -z "$share_name" || -z "$share_path" ]]; then
-      error "Не заданы обязательные параметры для удаления"
-    fi
+  [[ -z "$share_name" || -z "$share_path" ]] && error "Не заданы обязательные параметры для удаления"
+  ! grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Шара [$share_name] не найдена"
 
-    log "Удаление шары: $share_name"
-    if ! grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
-      error "Шара [$share_name] не найдена в конфиге"
-    fi
-
-    sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
-    log "Конфигурация удалена из smb.conf"
-
-    if [[ -d "$share_path" ]]; then
-      rm -rf "$share_path"
-      log "Каталог $share_path удалён"
-    else
-      log "Каталог $share_path не найден, пропускаем удаление"
-    fi
-
-    manage_service restart smb.service
-
-    echo '{"status": "deleted"}'
-    ;;
-
-  deploy)
-    log "Начало развертывания Samba"
-
-    if ! command -v smbd >/dev/null || ! command -v nmbd >/dev/null; then
-      error "Samba не установлен (отсутствуют smbd/nmbd)"
-    fi
-
-    log "Активация служб SMB/NMB"
-    systemctl enable --now smb nmb &>> "$LOG_FILE" || {
-      log "Ошибка активации: systemctl exit code $?"
-      error "Не удалось активировать службы Samba"
-    }
-
-    if ! systemctl is-active smb nmb >/dev/null; then
-      error "Службы не перешли в активное состояние"
-    fi
-
-    if command -v alterator-announce >/dev/null; then
-      log "Отправка сигнала о развертывании"
-      alterator-announce "samba_shares" "deployed" || \
-      log "Предупреждение: не удалось отправить announce"
-    fi
-
-    log "Развертывание успешно завершено"
-    echo "{
-      \"status\": \"deployed\",
-      \"state\": \"deployed\",
-      \"services\": {
-        \"smb\": \"$(systemctl is-active smb)\",
-        \"nmb\": \"$(systemctl is-active nmb)\"
-      },
-      \"message\": \"Samba успешно развернут\"
-    }"
-
-    ;;
-
-  undeploy)
-    log "Остановка и отключение служб Samba"
-
-    manage_service stop smb.service
-    manage_service disable smb.service
-    manage_service stop nmb.service
-    manage_service disable nmb.service
-
-    log "Службы остановлены и отключены"
-    echo '{"status": "undeployed"}'
-    ;;
-
-  start)
-    log "Запуск службы smb.service"
-    manage_service start smb.service
-    shares_json=$(get_samba_shares)
-
-    echo "{\"status\":\"started\", \"shares\": $shares_json}"
-
-    return 0
-    ;;
-
-  stop)
-    log "Остановка службы smb.service"
-    manage_service stop smb.service
-    shares_json=$(get_samba_shares)
-    echo "{\"status\":\"stopped\", \"shares\": $shares_json}"
-    return 0
-    ;;
-
-  status)
-    smb_status=$(systemctl is-active smb.service)
-    nmb_status=$(systemctl is-active nmb.service)
-
-    if [[ "$smb_status" == "active" && "$nmb_status" == "active" ]]; then
-      state="deployed"
-      exit_code=128
-    elif [[ "$smb_status" == "active" || "$nmb_status" == "active" ]]; then
-      state="deployed"
-      exit_code=127
-    else
-      state="undeployed"
-      exit_code=0
-    fi
-
-    shares_json=$(get_samba_shares)
-
-    echo "{
-      \"status\": \"$state\",
-      \"state\": \"$state\",
-      \"services\": {
-        \"smb\": \"$smb_status\",
-        \"nmb\": \"$nmb_status\"
-      },
-      \"shares\": $shares_json
-    }"
-
-    exit $exit_code
-    ;;
-
-  update)
-  if [[ -z "$share_name" ]]; then
-    error "Не указано имя шары для обновления"
-  fi
-
-  if [[ -z "$share_path" || -z "$access_user" || -z "$access_type" ]]; then
-    error "Недостаточно параметров для обновления"
-  fi
-
-  log "Обновление шары: $share_name"
-
-  # Удаляем старую секцию из smb.conf
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
-  log "Удалена старая конфигурация шары $share_name"
+  [[ -d "$share_path" ]] && rm -rf "$share_path"
 
-  # Определяем список валидных пользователей для шары
-  valid_users="$access_user"
-  if [[ -n "$allowed_users" && "$allowed_users" != "null" ]]; then
-    valid_users="$allowed_users"
+  manage_service restart smb.service
+  echo '{"status": "deleted"}'
+}
+
+deploy_samba() {
+  command -v smbd >/dev/null || error "Samba не установлена"
+  systemctl enable --now smb nmb &>> "$LOG_FILE" || error "Не удалось активировать службы Samba"
+  ! systemctl is-active smb nmb >/dev/null && error "Службы не перешли в активное состояние"
+
+  command -v alterator-announce >/dev/null && alterator-announce "samba_shares" "deployed" || true
+
+  echo "{
+    \"status\": \"deployed\",
+    \"state\": \"deployed\",
+    \"services\": {
+      \"smb\": \"$(systemctl is-active smb)\",
+      \"nmb\": \"$(systemctl is-active nmb)\"
+    },
+    \"message\": \"Samba успешно развернут\"
+  }"
+}
+
+undeploy_samba() {
+  manage_service stop smb.service
+  manage_service disable smb.service
+  manage_service stop nmb.service
+  manage_service disable nmb.service
+
+  echo '{"status": "undeployed"}'
+}
+
+start_samba() {
+  manage_service start smb.service
+  local shares_json
+  shares_json=$(get_samba_shares)
+  echo "{\"status\":\"started\", \"shares\": $shares_json}"
+}
+
+stop_samba() {
+  manage_service stop smb.service
+  local shares_json
+  shares_json=$(get_samba_shares)
+  echo "{\"status\":\"stopped\", \"shares\": $shares_json}"
+}
+
+status_samba() {
+  local smb_status nmb_status state exit_code shares_json
+  smb_status=$(systemctl is-active smb.service)
+  nmb_status=$(systemctl is-active nmb.service)
+
+  if [[ "$smb_status" == "active" && "$nmb_status" == "active" ]]; then
+    state="deployed"; exit_code=128
+  elif [[ "$smb_status" == "active" || "$nmb_status" == "active" ]]; then
+    state="deployed"; exit_code=127
+  else
+    state="undeployed"; exit_code=0
   fi
 
-  writable="no"
-  if [[ "$access_type" == "rw" ]]; then writable="yes"; fi
+  shares_json=$(get_samba_shares)
+
+  echo "{
+    \"status\": \"$state\",
+    \"state\": \"$state\",
+    \"services\": {
+      \"smb\": \"$smb_status\",
+      \"nmb\": \"$nmb_status\"
+    },
+    \"shares\": $shares_json
+  }"
+  exit $exit_code
+}
+
+update_share() {
+  local share_name=$1 share_path=$2 access_user=$3 access_type=$4 allowed_users=$5
+
+  [[ -z "$share_name" || -z "$share_path" || -z "$access_user" || -z "$access_type" ]] && error "Недостаточно параметров для обновления"
+
+  sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
+
+  local valid_users="$access_user"
+  [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
+
+  local writable="no"
+  [[ "$access_type" == "rw" ]] && writable="yes"
 
   cat <<EOF >> /etc/samba/smb.conf
 
@@ -387,69 +271,70 @@ EOF
    valid users = $valid_users
 EOF
 
-  # Проверка корректности конфигурации
-  if ! testparm -s /etc/samba/smb.conf >/dev/null; then
-    error "Ошибка в конфигурации smb.conf после обновления"
-  fi
+  testparm -s /etc/samba/smb.conf >/dev/null || error "Ошибка в конфигурации"
 
-  # Создаем каталог, если не существует
-  mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
+  mkdir -p "$share_path"
+  chown -R "$access_user":"users" "$share_path"
 
-  # Устанавливаем владельца
-  chown -R "$access_user":"users" "$share_path" || error "Не удалось изменить владельца"
+  command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
 
-  # Удалим возможные ACL (если setfacl доступен)
-  if command -v setfacl >/dev/null; then
-    setfacl -b "$share_path" 2>/dev/null || log "Не удалось сбросить ACL для $share_path"
-  fi
+  [[ "$access_type" == "rw" ]] && chmod 2770 "$share_path" || chmod 2750 "$share_path"
 
-  # Устанавливаем права
-  if [[ "$access_type" == "rw" ]]; then
-    chmod 2770 "$share_path" || error "Не удалось установить права 2770"
-  else
-    chmod 2750 "$share_path" || error "Не удалось установить права 2750"
-  fi
+  [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи"
+}
 
-  # Лог текущих прав
-  log "Права на каталог после обновления: $(ls -ld "$share_path")"
+backup_config() {
+  local backup_file="/etc/samba/smb-b.conf"
+  mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку"
 
-  # Проверка доступности записи при rw
-  if [[ "$access_type" == "rw" && ! -w "$share_path" ]]; then
-    error "Папка $share_path недоступна для записи после обновления прав"
-  fi
-  ;;
-
-  backup)
-  backup_file="/etc/samba/smb-b.conf"
-
-  mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку для бэкапа"
-
-  if cp /etc/samba/smb.conf "$backup_file"; then
-    log "Конфигурация Samba сохранена в $backup_file"
-    echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
-  else
+  cp /etc/samba/smb.conf "$backup_file" && \
+    echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}" || \
     error "Не удалось создать бэкап"
-  fi
-  ;;
+}
 
-  restore)
-  backup_file="/etc/samba/smb-b.conf"
+restore_config() {
+  local backup_file="/etc/samba/smb-b.conf"
+  [[ ! -f "$backup_file" ]] && error "Бэкап не найден"
 
-  if [[ -f "$backup_file" ]]; then
-    cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
-    systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
-    log "Конфигурация Samba восстановлена из $backup_file"
-    echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена\"}"
-  else
-    error "Бэкап не найден по пути $backup_file"
-  fi
-  ;;
+  cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
+  systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
 
-  *)
-    error "Неизвестное действие: $action"
-    ;;
+  echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена\"}"
+}
+
+# ========== ГЛАВНЫЙ БЛОК ==========
+
+log "--- Запуск скрипта ---"
+acquire_lock
+
+[[ "$EUID" -ne 0 ]] && error "Root required"
+
+read -t 10 -r input || { log "Таймаут при чтении входных данных"; input="{}"; }
+log "Получены входные данные: $input"
+
+action=$(echo "$input" | jq -r '.operation // empty')
+[[ -z "$action" ]] && action="$1"
+[[ -z "$action" ]] && error "Не указано поле 'operation'"
+
+share_name=$(echo "$input" | jq -r '.share_name // empty')
+share_path=$(echo "$input" | jq -r '.share_path // empty')
+access_user=$(echo "$input" | jq -r '.access_user // empty')
+access_type=$(echo "$input" | jq -r '.access_type // empty')
+allowed_users=$(echo "$input" | jq -r '.allowed_users // empty')
+
+case "$action" in
+  create) create_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
+  delete) delete_share "$share_name" "$share_path" ;;
+  deploy) deploy_samba ;;
+  undeploy) undeploy_samba ;;
+  start) start_samba ;;
+  stop) stop_samba ;;
+  status) status_samba ;;
+  update) update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
+  backup) backup_config ;;
+  restore) restore_config ;;
+  *) error "Неизвестное действие: $action" ;;
 esac
-
 
 log "Скрипт успешно завершен"
 release_lock
