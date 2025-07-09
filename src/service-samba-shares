@@ -304,20 +304,6 @@ status_samba() {
   exit $exit_code
 }
 
-# backup_config() {
-#   local backup_file="/etc/samba/smb-b.conf"
-#   mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку"
-
-#   # cp /etc/samba/smb.conf "$backup_file" && \
-#   #   echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}" || \
-#   #   error "Не удалось создать бэкап"
-#   if cp /etc/samba/smb.conf "$backup_file"; then
-#     echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
-#   else
-#     error "Не удалось создать бэкап"
-#   fi
-# }
-
 backup_config() {
   local backup_dir="/etc/samba/backups"
   mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
@@ -340,16 +326,6 @@ backup_config() {
     error "Не удалось создать бэкап"
   fi
 }
-
-# restore_config() {
-#   local backup_file="/etc/samba/smb-b.conf"
-#   [[ ! -f "$backup_file" ]] && error "Бэкап не найден"
-
-#   cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
-#   systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
-
-#   echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена\"}"
-# }
 
 restore_config() {
   local backup_dir="/etc/samba/backups"
