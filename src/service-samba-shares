@@ -305,10 +305,9 @@ status_samba() {
 }
 
 backup_config() {
+  local backup_name=$1
   local backup_dir="/etc/samba/backups"
   mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
-
-  local backup_name=$(echo "$input" | jq -r '.backup_name // empty')
 
   if [[ -z "$backup_name" || "$backup_name" == "null" ]]; then
     local timestamp
@@ -328,11 +327,9 @@ backup_config() {
 }
 
 restore_config() {
+  local backup_name=$1
   local backup_dir="/etc/samba/backups"
   mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
-
-  local backup_name
-  backup_name=$(echo "$input" | jq -r '.backup_name // empty')
 
   local backup_file
 
@@ -381,6 +378,8 @@ share_path=$(echo "$input" | jq -r '.share_path // empty')
 access_user=$(echo "$input" | jq -r '.access_user // empty')
 access_type=$(echo "$input" | jq -r '.access_type // empty')
 allowed_users=$(echo "$input" | jq -r '.allowed_users // empty')
+backup_name=$(echo "$input" | jq -r '.backup_name // empty')
+
 
 case "$action" in
   create) create_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
@@ -391,8 +390,8 @@ case "$action" in
   stop) stop_samba ;;
   status) status_samba ;;
   update) update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
-  backup) backup_config ;;
-  restore) restore_config ;;
+  backup) backup_config "$backup_name";;
+  restore) restore_config "$backup_name";;
   list_backups) list_backups ;;
   *) error "Неизвестное действие: $action" ;;
 esac
