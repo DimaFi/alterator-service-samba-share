@@ -91,6 +91,14 @@ comment.ru = "Путь к конфигурационному файлу Samba sm
 type = "file"
 path.value = "/etc/samba/smb.conf"
 
+[resources.backups]
+display_name.en = "Samba Configuration File"
+display_name.ru = "Конфигурационны файл Samba"
+comment.en = "Path to Samba smb.conf file"
+comment.ru = "Путь к конфигурационному файлу Samba smb.conf"
+type = "file"
+path.value = "/etc/samba/backups"
+
 [resources.smb_service]
 display_name.en = "Samba service"
 display_name.ru = "Сервис Samba"

@@ -235,6 +235,14 @@ EOF
 
 deploy_samba() {
   command -v smbd >/dev/null || error "Samba не установлена"
+
+  # Сохраняем оригинал только один раз
+  local original="/etc/samba/smb-original.conf"
+  if [[ ! -f "$original" ]]; then
+    mkdir -p /etc/samba/backups || error "Не удалось создать директорию бэкапов"
+    cp /etc/samba/smb.conf "$original" || error "Не удалось сохранить оригинальный smb.conf"
+  fi
+
   systemctl enable --now smb nmb &>> "$LOG_FILE" || error "Не удалось активировать службы Samba"
   ! systemctl is-active smb nmb >/dev/null && error "Службы не перешли в активное состояние"
 
@@ -260,7 +268,14 @@ undeploy_samba() {
   manage_service stop nmb.service
   manage_service disable nmb.service
 
-  echo '{"status": "undeployed"}'
+  local original="/etc/samba/smb-original.conf"
+  if [[ -f "$original" ]]; then
+    cp "$original" /etc/samba/smb.conf || error "Не удалось восстановить оригинальный smb.conf"
+  else
+    log "Оригинальный smb.conf не найден, восстановление пропущено"
+  fi
+
+  echo '{"status": "undeployed", "message": "Samba отключена, smb.conf восстановлен"}'
 }
 
 start_samba() {
@@ -349,15 +364,15 @@ restore_config() {
   echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена из $backup_file\"}"
 }
 
-list_backups() {
-  local backup_dir="/etc/samba/backups"
-  mkdir -p "$backup_dir" || error "Не удалось создать директорию"
+# list_backups() {
+#   local backup_dir="/etc/samba/backups"
+#   mkdir -p "$backup_dir" || error "Не удалось создать директорию"
 
-  local files
-  files=$(ls -1t "$backup_dir"/*.conf 2>/dev/null | xargs -n1 basename)
+#   local files
+#   files=$(ls -1t "$backup_dir"/*.conf 2>/dev/null | xargs -n1 basename)
 
-  echo "{\"backups\": [$(echo "$files" | jq -R . | jq -s -c '.')]}"
-}
+#   echo "{\"backups\": [$(echo "$files" | jq -R . | jq -s -c '.')]}"
+# }
 
 # ========== ГЛАВНЫЙ БЛОК ==========
 
@@ -392,7 +407,7 @@ case "$action" in
   update) update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
   backup) backup_config "$backup_name";;
   restore) restore_config "$backup_name";;
-  list_backups) list_backups ;;
+  # list_backups) list_backups ;;
   *) error "Неизвестное действие: $action" ;;
 esac
 
