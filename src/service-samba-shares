@@ -189,6 +189,50 @@ delete_share() {
   echo '{"status": "deleted"}'
 }
 
+update_share() {
+  local share_name=$1 share_path=$2 access_user=$3 access_type=$4 allowed_users=$5
+
+  [[ -z "$share_name" || -z "$share_path" || -z "$access_user" || -z "$access_type" ]] && error "Недостаточно параметров для обновления"
+
+  sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
+
+  local valid_users="$access_user"
+  [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
+
+  local writable="no"
+  [[ "$access_type" == "rw" ]] && writable="yes"
+
+  cat <<EOF >> /etc/samba/smb.conf
+
+[$share_name]
+   path = $share_path
+   browsable = yes
+   writable = $writable
+   guest ok = no
+   valid users = $valid_users
+EOF
+
+  testparm -s /etc/samba/smb.conf >/dev/null || error "Ошибка в конфигурации"
+
+  mkdir -p "$share_path"
+  chown -R "$access_user":"users" "$share_path"
+
+  # command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
+  if command -v setfacl >/dev/null 2>&1; then
+    setfacl -b "$share_path" 2>/dev/null || true
+  fi
+
+  # [[ "$access_type" == "rw" ]] && chmod 2770 "$share_path" || chmod 2750 "$share_path"
+  if [[ "$access_type" == "rw" ]]; then
+    chmod 2770 "$share_path"
+  else
+    chmod 2750 "$share_path"
+  fi
+
+
+  [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи"
+}
+
 deploy_samba() {
   command -v smbd >/dev/null || error "Samba не установлена"
   systemctl enable --now smb nmb &>> "$LOG_FILE" || error "Не удалось активировать службы Samba"
@@ -260,57 +304,36 @@ status_samba() {
   exit $exit_code
 }
 
-update_share() {
-  local share_name=$1 share_path=$2 access_user=$3 access_type=$4 allowed_users=$5
+# backup_config() {
+#   local backup_file="/etc/samba/smb-b.conf"
+#   mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку"
 
-  [[ -z "$share_name" || -z "$share_path" || -z "$access_user" || -z "$access_type" ]] && error "Недостаточно параметров для обновления"
-
-  sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
-
-  local valid_users="$access_user"
-  [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
-
-  local writable="no"
-  [[ "$access_type" == "rw" ]] && writable="yes"
-
-  cat <<EOF >> /etc/samba/smb.conf
-
-[$share_name]
-   path = $share_path
-   browsable = yes
-   writable = $writable
-   guest ok = no
-   valid users = $valid_users
-EOF
-
-  testparm -s /etc/samba/smb.conf >/dev/null || error "Ошибка в конфигурации"
-
-  mkdir -p "$share_path"
-  chown -R "$access_user":"users" "$share_path"
-
-  # command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
-  if command -v setfacl >/dev/null 2>&1; then
-    setfacl -b "$share_path" 2>/dev/null || true
-  fi
-
-  # [[ "$access_type" == "rw" ]] && chmod 2770 "$share_path" || chmod 2750 "$share_path"
-  if [[ "$access_type" == "rw" ]]; then
-    chmod 2770 "$share_path"
-  else
-    chmod 2750 "$share_path"
-  fi
-
-
-  [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи"
-}
+#   # cp /etc/samba/smb.conf "$backup_file" && \
+#   #   echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}" || \
+#   #   error "Не удалось создать бэкап"
+#   if cp /etc/samba/smb.conf "$backup_file"; then
+#     echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
+#   else
+#     error "Не удалось создать бэкап"
+#   fi
+# }
 
 backup_config() {
-  local backup_file="/etc/samba/smb-b.conf"
-  mkdir -p "$(dirname "$backup_file")" || error "Не удалось создать папку"
+  local backup_dir="/etc/samba/backups"
+  mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
 
-  # cp /etc/samba/smb.conf "$backup_file" && \
-  #   echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}" || \
-  #   error "Не удалось создать бэкап"
+  local backup_name=$(echo "$input" | jq -r '.backup_name // empty')
+
+  if [[ -z "$backup_name" || "$backup_name" == "null" ]]; then
+    local timestamp
+    timestamp=$(date '+%Y%m%d-%H%M%S')
+    backup_name="smb-$timestamp.conf"
+  else
+    [[ "$backup_name" != *.conf ]] && backup_name="${backup_name}.conf"
+  fi
+
+  local backup_file="$backup_dir/$backup_name"
+
   if cp /etc/samba/smb.conf "$backup_file"; then
     echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
   else
@@ -318,14 +341,49 @@ backup_config() {
   fi
 }
 
+# restore_config() {
+#   local backup_file="/etc/samba/smb-b.conf"
+#   [[ ! -f "$backup_file" ]] && error "Бэкап не найден"
+
+#   cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
+#   systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
+
+#   echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена\"}"
+# }
+
 restore_config() {
-  local backup_file="/etc/samba/smb-b.conf"
-  [[ ! -f "$backup_file" ]] && error "Бэкап не найден"
+  local backup_dir="/etc/samba/backups"
+  mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
+
+  local backup_name
+  backup_name=$(echo "$input" | jq -r '.backup_name // empty')
+
+  local backup_file
+
+  if [[ -n "$backup_name" && "$backup_name" != "null" ]]; then
+    [[ "$backup_name" != *.conf ]] && backup_name="${backup_name}.conf"
+    backup_file="$backup_dir/$backup_name"
+    [[ ! -f "$backup_file" ]] && error "Указанный бэкап не найден: $backup_file"
+  else
+    # Берем последний файл по времени модификации
+    backup_file=$(ls -t "$backup_dir"/*.conf 2>/dev/null | head -n 1)
+    [[ -z "$backup_file" ]] && error "Нет доступных бэкапов для восстановления"
+  fi
 
   cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
   systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
 
-  echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена\"}"
+  echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена из $backup_file\"}"
+}
+
+list_backups() {
+  local backup_dir="/etc/samba/backups"
+  mkdir -p "$backup_dir" || error "Не удалось создать директорию"
+
+  local files
+  files=$(ls -1t "$backup_dir"/*.conf 2>/dev/null | xargs -n1 basename)
+
+  echo "{\"backups\": [$(echo "$files" | jq -R . | jq -s -c '.')]}"
 }
 
 # ========== ГЛАВНЫЙ БЛОК ==========
@@ -359,6 +417,7 @@ case "$action" in
   update) update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
   backup) backup_config ;;
   restore) restore_config ;;
+  list_backups) list_backups ;;
   *) error "Неизвестное действие: $action" ;;
 esac
 
