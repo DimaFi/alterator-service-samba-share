@@ -17,16 +17,16 @@ error() {
   exit 1
 } 
 
-acquire_lock() {
-  exec 9>/var/lock/samba-shares.lock
-  flock -n 9 || error "Другая операция уже выполняется"
-  trap 'release_lock' EXIT
-}
+# acquire_lock() {
+#   exec 9>/var/lock/samba-shares.lock
+#   flock -n 9 || error "Другая операция уже выполняется"
+#   trap 'release_lock' EXIT
+# }
 
-release_lock() {
-  flock -u 9
-  rm -f /var/lock/samba-shares.lock
-}
+# release_lock() {
+#   flock -u 9
+#   rm -f /var/lock/samba-shares.lock
+# }
 
 manage_service() {
   local action=$1
@@ -331,7 +331,7 @@ restore_config() {
 # ========== ГЛАВНЫЙ БЛОК ==========
 
 log "--- Запуск скрипта ---"
-acquire_lock
+# acquire_lock
 
 [[ "$EUID" -ne 0 ]] && error "Root required"
 
@@ -363,5 +363,5 @@ case "$action" in
 esac
 
 log "Скрипт успешно завершен"
-release_lock
+# release_lock
 exit 0
