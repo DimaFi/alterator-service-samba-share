@@ -1,8 +1,71 @@
 #!/bin/bash
 
+# Chrony service provision
+# Tool for provision chrony service
+#
+# Copyright (C) 2025 Filippenko Dmitry
+# dmitfilippenko@yandex.ru
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+
+# shellcheck disable=SC2034
+# shellcheck disable=SC1091
+# shellcheck disable=SC2086
+# shellcheck disable=SC2317
+# shellcheck disable=SC3037
+
 export SYSTEMD_PAGER=
 export LC_ALL=C
-set -o pipefail
+set -euo pipefail
+
+
+
+. shell-getopt || true
+. shell-ini-config || true
+
+PROG_NAME="${0##*/}"
+
+show_usage() {
+    cat <<EOF
+Usage: $PROG_NAME [OPTIONS]
+
+Tool for managing Samba shares.
+
+Options:
+  -h, --help          Show this help message and exit.
+  -v, --version       Show program's version number and exit.
+  --create            Create a new Samba share (requires JSON input).
+  --delete            Delete an existing Samba share (requires JSON input).
+  --update            Update an existing Samba share (requires JSON input).
+  --deploy            Deploy Samba services and configure initial state.
+  --undeploy          Disable Samba services and restore initial config.
+  --backup            Backup Samba configuration (optional name via JSON).
+  --restore           Restore Samba configuration from backup (optional name).
+  --start             Start Samba service.
+  --stop              Stop Samba service.
+  --status            Show status of Samba services and shares.
+
+Input for create, delete, update, backup, restore, deploy, and undeploy
+operations is expected as a JSON object via standard input.
+
+EOF
+    exit 0
+}
+
+# Если передан флаг --help или -h, вывести справку и выйти
+[[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && show_usage
+
 
 LOG_FILE="/var/log/samba-shares.log"
 
@@ -16,28 +79,6 @@ error() {
   release_lock
   exit 1
 } 
-
-# acquire_lock() {
-#   exec 9>/var/lock/samba-shares.lock
-#   flock -n 9 || error "Другая операция уже выполняется"
-#   trap 'release_lock' EXIT
-# }
-
-# release_lock() {
-#   flock -u 9
-#   rm -f /var/lock/samba-shares.lock
-# }
-
-manage_service() {
-  local action=$1
-  local service=$2
-  log "Выполняем: systemctl $action $service"
-
-  if ! timeout 15 systemctl "$action" "$service" >> "$LOG_FILE" 2>&1; then
-    error "Не удалось выполнить $action для $service"
-  fi
-}
-
 
 get_samba_shares() {
   testparm -s 2>/dev/null | awk '
@@ -113,42 +154,43 @@ get_samba_shares() {
   '
 }
 
-# ======= ФУНКЦИИ ДЛЯ КАЖДОГО ACTION =======
+# ======= FUNC FOR ALL ACTION =======
 
 create_share() {
-  local share_name=$1 share_path=$2 access_user=$3 access_type=$4 allowed_users=$5
+  local share_name="$1" 
+  local share_path="$2"
+  local access_user="$3" 
+  local access_type="$4" 
+  local allowed_users="$5"
 
-  log "Создание шары: $share_name по пути $share_path"
+  log "Create shared folder: $share_name on path $share_path"
 
-  if [[ -z "$share_path" || -z "$share_name" || -z "$access_user" || -z "$access_type" ]]; then
-    error "Не заданы обязательные параметры для создания"
+  if [ -z "$share_path" ] || [ -z "$share_name" ] || [ -z "$access_user" ] || [ -z "$access_type" ]; then
+    error "Required parameters for creation are not set."
   fi
 
-  mkdir -p "$share_path" || error "Не удалось создать папку $share_path"
+  mkdir -p "$share_path" || error "Couldn't create folder $share_path"
   user_group=$(id -gn "$access_user")
-  chown -R "$access_user":"$user_group" "$share_path" || error "Не удалось изменить владельца"
+  chown -R "$access_user":"$user_group" "$share_path" || error "Couldn't change the owner"
 
-  # command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
   if command -v setfacl >/dev/null 2>&1; then
     setfacl -b "$share_path" 2>/dev/null || true
   fi
 
   local writable="no"
-  if [[ "$access_type" == "rw" ]]; then
-    chmod 2770 "$share_path" || error "Не удалось установить права 2770"
+  if [ "$access_type" == "rw" ]; then
+    chmod 2770 "$share_path" || error "Couldn't set rights 2770"
     writable="yes"
   else
-    chmod 2750 "$share_path" || error "Не удалось установить права 2750"
+    chmod 2750 "$share_path" || error "Couldn't set rights 2750"
   fi
 
-  [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи после установки прав"
+  [ "$access_type" == "rw" ] && [ ! -w "$share_path" ] && error "Folder $share_path not available for recording after rights have been set"
 
-  grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Шара [$share_name] уже существует"
+  grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] already exists"
 
-  # local valid_users="$access_user"
-  # [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
   local valid_users="$access_user"
-  if [[ -n "$allowed_users" && "$allowed_users" != "null" ]]; then
+  if [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ]; then
     valid_users="$access_user,$allowed_users"
   fi
 
@@ -167,40 +209,53 @@ create_share() {
    valid users = $valid_users
 EOF
 
-  testparm -s "$TEMP_FILE" >/dev/null || { rm -f "$TEMP_FILE"; error "Ошибка в конфигурации smb.conf"; }
+  testparm -s "$TEMP_FILE" >/dev/null || { rm -f "$TEMP_FILE"; error "Configuration error in smb.conf"; }
 
   mv "$TEMP_FILE" /etc/samba/smb.conf
   chmod 644 /etc/samba/smb.conf
-  manage_service restart smb.service
+
+  log "Running: systemctl restart smb.service"
+  if ! timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1; then
+    error "Couldn't restart restart for smb.service"
+  fi
 
   echo '{"status": "created"}'
 }
 
 delete_share() {
-  local share_name=$1 share_path=$2
+  local share_name="$1"
+  local share_path="$2"
 
-  [[ -z "$share_name" || -z "$share_path" ]] && error "Не заданы обязательные параметры для удаления"
-  ! grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Шара [$share_name] не найдена"
+  [ -z "$share_name" ] || [ -z "$share_path" ] && error "Required parameters for deletion are not set"
+  ! grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] not found"
 
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
-  [[ -d "$share_path" ]] && rm -rf "$share_path"
+  [ -d "$share_path" ] && rm -rf "$share_path"
 
-  manage_service restart smb.service
+  log "С: systemctl restart smb.service"
+  if ! timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1; then
+    error "Couldn't restart restart for smb.service"
+  fi
+
   echo '{"status": "deleted"}'
 }
 
 update_share() {
-  local share_name=$1 share_path=$2 access_user=$3 access_type=$4 allowed_users=$5
+  local share_name="$1" 
+  local share_path="$2" 
+  local access_user="$3" 
+  local access_type="$4" 
+  local allowed_users="$5"
 
-  [[ -z "$share_name" || -z "$share_path" || -z "$access_user" || -z "$access_type" ]] && error "Недостаточно параметров для обновления"
+  [ -z "$share_name" ] || [ -z "$share_path" ] || [ -z "$access_user" ] || [ -z "$access_type" ] && error "There are not enough parameters to update"
 
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
 
   local valid_users="$access_user"
-  [[ -n "$allowed_users" && "$allowed_users" != "null" ]] && valid_users="$allowed_users"
+  [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ] && valid_users="$allowed_users"
 
   local writable="no"
-  [[ "$access_type" == "rw" ]] && writable="yes"
+  [ "$access_type" == "rw" ] && writable="yes"
 
   cat <<EOF >> /etc/samba/smb.conf
 
@@ -212,41 +267,38 @@ update_share() {
    valid users = $valid_users
 EOF
 
-  testparm -s /etc/samba/smb.conf >/dev/null || error "Ошибка в конфигурации"
+  testparm -s /etc/samba/smb.conf >/dev/null || error "Configuration error"
 
   mkdir -p "$share_path"
   chown -R "$access_user":"users" "$share_path"
 
-  # command -v setfacl >/dev/null && setfacl -b "$share_path" 2>/dev/null || true
   if command -v setfacl >/dev/null 2>&1; then
     setfacl -b "$share_path" 2>/dev/null || true
   fi
 
-  # [[ "$access_type" == "rw" ]] && chmod 2770 "$share_path" || chmod 2750 "$share_path"
-  if [[ "$access_type" == "rw" ]]; then
+  if [ "$access_type" == "rw" ]; then
     chmod 2770 "$share_path"
   else
     chmod 2750 "$share_path"
   fi
 
 
-  [[ "$access_type" == "rw" && ! -w "$share_path" ]] && error "Папка $share_path недоступна для записи"
+  [ "$access_type" == "rw" ] && [ ! -w "$share_path" ] && error "Folder $share_path unavailable for recording"
 }
 
-deploy_samba() {
-  command -v smbd >/dev/null || error "Samba не установлена"
+deploy_samba_share() {
+  command -v smbd >/dev/null || error "Samba not installed"
 
-  # Сохраняем оригинал только один раз
+  # Save the original only once
   local original="/etc/samba/smb-original.conf"
-  if [[ ! -f "$original" ]]; then
-    mkdir -p /etc/samba/backups || error "Не удалось создать директорию бэкапов"
-    cp /etc/samba/smb.conf "$original" || error "Не удалось сохранить оригинальный smb.conf"
+  if [ ! -f "$original" ]; then
+    mkdir -p /etc/samba/backups || error "Failed to create backup directory"
+    cp /etc/samba/smb.conf "$original" || error "Couldn't save the original one smb.conf"
   fi
 
-  systemctl enable --now smb nmb &>> "$LOG_FILE" || error "Не удалось активировать службы Samba"
-  ! systemctl is-active smb nmb >/dev/null && error "Службы не перешли в активное состояние"
+  systemctl enable --now smb nmb &>> "$LOG_FILE" || error "Failed to activate services Samba"
+  ! systemctl is-active smb nmb >/dev/null && error "The services have not moved to an active state"
 
-  # command -v alterator-announce >/dev/null && alterator-announce "samba_shares" "deployed" || true
   if command -v alterator-announce >/dev/null 2>&1; then
     alterator-announce "samba_shares" "deployed" || true
   fi
@@ -258,48 +310,76 @@ deploy_samba() {
       \"smb\": \"$(systemctl is-active smb)\",
       \"nmb\": \"$(systemctl is-active nmb)\"
     },
-    \"message\": \"Samba успешно развернут\"
+    \"message\": \"Samba successfully deployed\"
   }"
 }
 
-undeploy_samba() {
-  manage_service stop smb.service
-  manage_service disable smb.service
-  manage_service stop nmb.service
-  manage_service disable nmb.service
-
-  local original="/etc/samba/smb-original.conf"
-  if [[ -f "$original" ]]; then
-    cp "$original" /etc/samba/smb.conf || error "Не удалось восстановить оригинальный smb.conf"
-  else
-    log "Оригинальный smb.conf не найден, восстановление пропущено"
+undeploy_samba_share() {
+  log "Executing: systemctl stop smb.service"
+  if ! timeout 15 systemctl stop smb.service >> "$LOG_FILE" 2>&1; then
+    error "Failed to execute stop for smb.service"
   fi
 
-  echo '{"status": "undeployed", "message": "Samba отключена, smb.conf восстановлен"}'
+  log "Executing: systemctl disable smb.service"
+  if ! timeout 15 systemctl disable smb.service >> "$LOG_FILE" 2>&1; then
+    error "Failed to execute disable for smb.service"
+  fi
+
+  log "Executing: systemctl stop nmb.service"
+  if ! timeout 15 systemctl stop nmb.service >> "$LOG_FILE" 2>&1; then
+    error "Failed to execute stop for nmb.service"
+  fi
+
+  log "Executing: systemctl disable nmb.service"
+  if ! timeout 15 systemctl disable nmb.service >> "$LOG_FILE" 2>&1; then
+    error "Failed to execute disable for nmb.service"
+  fi
+
+  local original="/etc/samba/smb-original.conf"
+  if [ -f "$original" ]; then
+    cp "$original" /etc/samba/smb.conf || error "Failed to restore original smb.conf"
+  else
+    log "Original smb.conf not found, restore skipped"
+  fi
+
+  echo '{"status": "undeployed", "message": "Samba disabled, smb.conf restored"}'
 }
 
-start_samba() {
-  manage_service start smb.service
+start_samba_share() {
+  log "Running: systemctl start smb.service"
+  if ! timeout 15 systemctl start smb.service >> "$LOG_FILE" 2>&1; then
+    error "Failed to run smb.service"
+  fi
+
   local shares_json
   shares_json=$(get_samba_shares)
   echo "{\"status\":\"started\", \"shares\": $shares_json}"
 }
 
-stop_samba() {
-  manage_service stop smb.service
+stop_samba_share() {
+  log "Running: systemctl stop smb.service"
+  if ! timeout 15 systemctl stop smb.service >> "$LOG_FILE" 2>&1; then
+    error "Failed to stop smb.service"
+  fi
+
   local shares_json
   shares_json=$(get_samba_shares)
   echo "{\"status\":\"stopped\", \"shares\": $shares_json}"
 }
 
-status_samba() {
-  local smb_status nmb_status state exit_code shares_json
+status_samba_share() {
+  local smb_status 
+  local nmb_status 
+  local state 
+  local exit_code 
+  local shares_json
+
   smb_status=$(systemctl is-active smb.service)
   nmb_status=$(systemctl is-active nmb.service)
 
-  if [[ "$smb_status" == "active" && "$nmb_status" == "active" ]]; then
+  if [ "$smb_status" == "active" ] && [ "$nmb_status" == "active" ]; then
     state="deployed"; exit_code=128
-  elif [[ "$smb_status" == "active" || "$nmb_status" == "active" ]]; then
+  elif [ "$smb_status" == "active" ] || [ "$nmb_status" == "active" ]; then
     state="deployed"; exit_code=127
   else
     state="undeployed"; exit_code=0
@@ -320,73 +400,70 @@ status_samba() {
 }
 
 backup_config() {
-  local backup_name=$1
+  local backup_name="$1"
   local backup_dir="/etc/samba/backups"
-  mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
 
-  if [[ -z "$backup_name" || "$backup_name" == "null" ]]; then
+  mkdir -p "$backup_dir" || error "Failed to create a backup directory"
+
+  if [ -z "$backup_name" ] || [ "$backup_name" = "null" ]; then
     local timestamp
     timestamp=$(date '+%Y%m%d-%H%M%S')
     backup_name="smb-$timestamp.conf"
   else
-    [[ "$backup_name" != *.conf ]] && backup_name="${backup_name}.conf"
+      case "$backup_name" in
+        *.conf) ;;
+        *) backup_name="${backup_name}.conf" ;;
+      esac
   fi
 
   local backup_file="$backup_dir/$backup_name"
 
   if cp /etc/samba/smb.conf "$backup_file"; then
-    echo "{\"status\": \"success\", \"message\": \"Конфигурация сохранена в $backup_file\"}"
+    echo "{\"status\": \"success\", \"message\": \"The configuration is saved in $backup_file\"}"
   else
-    error "Не удалось создать бэкап"
+    error "Failed to create backup"
   fi
 }
 
 restore_config() {
   local backup_name=$1
   local backup_dir="/etc/samba/backups"
-  mkdir -p "$backup_dir" || error "Не удалось создать директорию бэкапов"
+
+  mkdir -p "$backup_dir" || error "Failed to create a backup directory"
 
   local backup_file
 
-  if [[ -n "$backup_name" && "$backup_name" != "null" ]]; then
-    [[ "$backup_name" != *.conf ]] && backup_name="${backup_name}.conf"
+  if [ -n "$backup_name" ] && [ "$backup_name" != "null" ]; then
+    case "$backup_name" in
+      *.conf) ;; 
+      *) backup_name="${backup_name}.conf" ;;
+    esac
     backup_file="$backup_dir/$backup_name"
-    [[ ! -f "$backup_file" ]] && error "Указанный бэкап не найден: $backup_file"
+    [ ! -f "$backup_file" ] && error "Backup was not found: $backup_file"
   else
-    # Берем последний файл по времени модификации
-    backup_file=$(ls -t "$backup_dir"/*.conf 2>/dev/null | head -n 1)
-    [[ -z "$backup_file" ]] && error "Нет доступных бэкапов для восстановления"
+    # We take the latest file by modification time
+    backup_file=$(find "$backup_dir" -maxdepth 1 -type f -name '*.conf' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)
+    [ -z "$backup_file" ] && error "There are no backups available for recovery"
   fi
 
-  cp "$backup_file" /etc/samba/smb.conf || error "Не удалось восстановить конфигурацию"
-  systemctl restart smb.service || error "Ошибка перезапуска Samba после восстановления"
+  cp "$backup_file" /etc/samba/smb.conf || error "The configuration could not be restored"
+  systemctl restart smb.service || error "Samba restart error after recovery"
 
-  echo "{\"status\": \"restored\", \"message\": \"Конфигурация восстановлена из $backup_file\"}"
+  echo "{\"status\": \"restored\", \"message\": \"The configuration was restored from $backup_file\"}"
 }
 
-# list_backups() {
-#   local backup_dir="/etc/samba/backups"
-#   mkdir -p "$backup_dir" || error "Не удалось создать директорию"
+# ========== MAIN SCRIPT ==========
 
-#   local files
-#   files=$(ls -1t "$backup_dir"/*.conf 2>/dev/null | xargs -n1 basename)
+log "---Run script---"
 
-#   echo "{\"backups\": [$(echo "$files" | jq -R . | jq -s -c '.')]}"
-# }
+[ "$EUID" -ne 0 ] && error "Root required"
 
-# ========== ГЛАВНЫЙ БЛОК ==========
-
-log "--- Запуск скрипта ---"
-# acquire_lock
-
-[[ "$EUID" -ne 0 ]] && error "Root required"
-
-read -t 10 -r input || { log "Таймаут при чтении входных данных"; input="{}"; }
-log "Получены входные данные: $input"
+read -t 10 -r input || { log "Timeout when reading input data"; input="{}"; }
+log "Input data is received: $input"
 
 action=$(echo "$input" | jq -r '.operation // empty')
-[[ -z "$action" ]] && action="$1"
-[[ -z "$action" ]] && error "Не указано поле 'operation'"
+[ -z "$action" ] && action="$1"
+[ -z "$action" ] && error "The field is not specified 'operation'"
 
 share_name=$(echo "$input" | jq -r '.share_name // empty')
 share_path=$(echo "$input" | jq -r '.share_path // empty')
@@ -397,20 +474,39 @@ backup_name=$(echo "$input" | jq -r '.backup_name // empty')
 
 
 case "$action" in
-  create) create_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
-  delete) delete_share "$share_name" "$share_path" ;;
-  deploy) deploy_samba ;;
-  undeploy) undeploy_samba ;;
-  start) start_samba ;;
-  stop) stop_samba ;;
-  status) status_samba ;;
-  update) update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" ;;
-  backup) backup_config "$backup_name";;
-  restore) restore_config "$backup_name";;
-  # list_backups) list_backups ;;
-  *) error "Неизвестное действие: $action" ;;
+  create) 
+    create_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" 
+    ;;
+  delete) 
+    delete_share "$share_name" "$share_path" 
+    ;;
+  deploy) 
+    deploy_samba_share
+    ;;
+  undeploy) 
+    undeploy_samba_share
+    ;;
+  start) 
+    start_samba_share
+    ;;
+  stop) 
+    stop_samba_share
+    ;;
+  status) 
+    status_samba_share 
+    ;;
+  update) 
+    update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" 
+    ;;
+  backup) 
+    backup_config "$backup_name" 
+    ;;
+  restore) 
+    restore_config "$backup_name" 
+    ;;
+  *) error "Unknown action: $action" ;;
 esac
 
-log "Скрипт успешно завершен"
+log "The script has been successfully completed"
 # release_lock
 exit 0

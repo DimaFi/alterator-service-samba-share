@@ -92,10 +92,10 @@ type = "file"
 path.value = "/etc/samba/smb.conf"
 
 [resources.backups]
-display_name.en = "Samba Configuration File"
-display_name.ru = "Конфигурационны файл Samba"
-comment.en = "Path to Samba smb.conf file"
-comment.ru = "Путь к конфигурационному файлу Samba smb.conf"
+display_name.en = "Samba Backup Recovery files"
+display_name.ru = "Файлы резервного восстанавления Samba"
+comment.en = "Path to the Samba smb.conf backup files"
+comment.ru = "Путь к резервным файлам Samba smb.conf"
 type = "file"
 path.value = "/etc/samba/backups"
 
@@ -134,7 +134,7 @@ type = "string"
 display_name.en = "Access User"
 display_name.ru = "Пользователь"
 type = "string"
-[parameters.shares.properties.access_type]
+[parameters.shares.properties.access_type]  
 display_name.en = "Access Type"
 display_name.ru = "Тип доступа"
 type = "enum"

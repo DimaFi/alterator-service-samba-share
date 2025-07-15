@@ -214,9 +214,6 @@ echo '{"operation":"create","share_name":"data","share_path":"/srv/shares/data",
   - Через команду с параметром `mode=backup`
   - Может принимать дополнительный параметр `backup_path` для указания альтернативного каталога
 
-
-
-
   ### Развертывание и его отмена (deploy/undeploy)
 
   - При развертывании включаются службы smb и nmb
