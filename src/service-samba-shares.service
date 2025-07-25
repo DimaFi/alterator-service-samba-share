@@ -2,11 +2,11 @@ type = "Service"
 name = "service_samba_shares"
 category = "X-Alterator-Servers"
 
-display_name.en = "Samba Shares Service"
-display_name.ru = "Сервис общих папок Samba"
+display_name.en = "Samba Shares"
+display_name.ru = "Общие папки Samba"
 
-comment.en = "Service for managing Samba shares"
-comment.ru = "Сервис для управления общими папками Samba"
+comment.en = "For managing Samba shares"
+comment.ru = "Для управления общими папками Samba"
 
 enable_force_deploy = true
 no_default_diag = true
@@ -25,10 +25,21 @@ display_name.ru = "Операции"
 comment.en = "Choose the operation to perform: create, delete, update"
 comment.ru = "Выберите операцию: создать, удалить, изменить"
 type = "enum"
-values = ["create", "delete", "update"]
 default = "create"
 context = ["configure"]
 required = ["configure"]
+
+[parameters.operation.values.create]
+display_name.en = "Create"
+display_name.ru = "Создать"
+
+[parameters.operation.values.delete]
+display_name.en = "Delete"
+display_name.ru = "Удалить"
+
+[parameters.operation.values.update]
+display_name.en = "Update"
+display_name.ru = "Изменить"
 
 [parameters.share_name]
 display_name.en = "Share Name"
@@ -62,9 +73,16 @@ display_name.ru = "Тип доступа"
 comment.en = "Access permission: read-only (ro) or read-write (rw)"
 comment.ru = "Тип доступа: только чтение (ro) или чтение и запись (rw)"
 type = "enum"
-values = ["ro", "rw"]
 default = "ro"
 context = ["configure"]
+
+[parameters.access_type.values.ro]
+display_name.en = "Read-only"
+display_name.ru = "Только чтение"
+
+[parameters.access_type.values.rw]
+display_name.en = "Read/Write"
+display_name.ru = "Чтение и запись"
 
 [parameters.allowed_users]
 display_name.en = "Allowed Users"
@@ -134,12 +152,19 @@ type = "string"
 display_name.en = "Access User"
 display_name.ru = "Пользователь"
 type = "string"
-[parameters.shares.properties.access_type]  
+
+[parameters.shares.properties.access_type]
 display_name.en = "Access Type"
 display_name.ru = "Тип доступа"
 type = "enum"
-values = ["ro", "rw"]
 default = "ro"
+[parameters.shares.properties.access_type.values.ro]
+display_name.en = "Read-only"
+display_name.ru = "Только чтение"
+[parameters.shares.properties.access_type.values.rw]
+display_name.en = "Read/Write"
+display_name.ru = "Чтение и запись"
+
 [parameters.shares.properties.enabled]
 display_name.en = "Enabled"
 display_name.ru = "Включена"
