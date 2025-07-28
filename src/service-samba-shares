@@ -150,7 +150,7 @@ get_samba_shares() {
 
       print "\n]"
     }
-  '
+  ' 
 }
 
 # ======= FUNC FOR ALL ACTION =======
@@ -289,9 +289,9 @@ deploy_samba_share() {
   command -v smbd >/dev/null || error "Samba not installed"
 
   # Save the original only once
-  local original="/etc/samba/smb-original.conf"
+  local original="/var/lib/alterator/service/service-samba-share/config-backup/smb-original.conf"
   if [ ! -f "$original" ]; then
-    mkdir -p /etc/samba/backups || error "Failed to create backup directory"
+    mkdir -p /var/lib/alterator/service/service-samba-share/config-backup || error "Failed to create backup directory"
     cp /etc/samba/smb.conf "$original" || error "Couldn't save the original one smb.conf"
   fi
 
@@ -334,7 +334,7 @@ undeploy_samba_share() {
     error "Failed to execute disable for nmb.service"
   fi
 
-  local original="/etc/samba/smb-original.conf"
+  local original="/var/lib/alterator/service/service-samba-share/config-backup/smb-original.conf"
   if [ -f "$original" ]; then
     cp "$original" /etc/samba/smb.conf || error "Failed to restore original smb.conf"
   else
@@ -400,7 +400,7 @@ status_samba_share() {
 
 backup_config() {
   local backup_name="$1"
-  local backup_dir="/etc/samba/backups"
+  local backup_dir="/var/lib/alterator/service/service-samba-share/config-backup"
 
   mkdir -p "$backup_dir" || error "Failed to create a backup directory"
 
@@ -426,7 +426,7 @@ backup_config() {
 
 restore_config() {
   local backup_name=$1
-  local backup_dir="/etc/samba/backups"
+  local backup_dir="/var/lib/alterator/service/service-samba-share/config-backup"
 
   mkdir -p "$backup_dir" || error "Failed to create a backup directory"
 
