@@ -62,7 +62,7 @@ EOF
     exit 0
 }
 
-# Если передан флаг --help или -h, вывести справку и выйти
+# If the --help or -h flag is passed, print help and exit.
 [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]] && show_usage
 
 
@@ -398,58 +398,96 @@ status_samba_share() {
   exit $exit_code
 }
 
-backup_config() {
+backup_all() {
   local backup_name="$1"
-  local backup_dir="/var/lib/alterator/service/service-samba-share/config-backup"
+  local config_dir="/var/lib/alterator/service/service-samba-share/config-backup"
+  local data_dir="/var/lib/alterator/service/service-samba-share/data-backup"
 
-  mkdir -p "$backup_dir" || error "Failed to create a backup directory"
+  mkdir -p "$config_dir" "$data_dir" || error "Failed to create backup directories"
 
   if [ -z "$backup_name" ] || [ "$backup_name" = "null" ]; then
     local timestamp
     timestamp=$(date '+%Y%m%d-%H%M%S')
-    backup_name="smb-$timestamp.conf"
-  else
-      case "$backup_name" in
-        *.conf) ;;
-        *) backup_name="${backup_name}.conf" ;;
-      esac
+    backup_name="smb-$timestamp"
   fi
 
-  local backup_file="$backup_dir/$backup_name"
+  local config_file="$config_dir/${backup_name}.conf"
+  local data_file="$data_dir/${backup_name}.tar.gz"
 
-  if cp /etc/samba/smb.conf "$backup_file"; then
-    echo "{\"status\": \"success\", \"message\": \"The configuration is saved in $backup_file\"}"
+  if cp /etc/samba/smb.conf "$config_file"; then
+    :
   else
-    error "Failed to create backup"
+    error "Failed to create config backup"
   fi
+
+  # getting a list of paths from smb.conf via testparm and jq
+  local shares
+  shares=$(get_samba_shares | jq -r '.[].share_path')
+
+  if [ -n "$shares" ]; then
+    if tar -czf "$data_file" $shares; then
+      :
+    else
+      error "Failed to create data archive"
+    fi
+  fi
+
+  echo "{\"status\": \"success\", \"config\": \"$config_file\", \"data\": \"$data_file\"}"
 }
 
-restore_config() {
-  local backup_name=$1
-  local backup_dir="/var/lib/alterator/service/service-samba-share/config-backup"
+restore_all() {
+  local backup_name="$1"
+  local config_dir="/var/lib/alterator/service/service-samba-share/config-backup"
+  local data_dir="/var/lib/alterator/service/service-samba-share/data-backup"
 
-  mkdir -p "$backup_dir" || error "Failed to create a backup directory"
+  mkdir -p "$config_dir" "$data_dir" || error "Failed to create backup directories"
 
-  local backup_file
+  local config_file
+  local data_file
 
   if [ -n "$backup_name" ] && [ "$backup_name" != "null" ]; then
     case "$backup_name" in
-      *.conf) ;; 
-      *) backup_name="${backup_name}.conf" ;;
+      *.conf) backup_name="${backup_name%.conf}" ;;
+      *.tar.gz) backup_name="${backup_name%.tar.gz}" ;;
     esac
-    backup_file="$backup_dir/$backup_name"
-    [ ! -f "$backup_file" ] && error "Backup was not found: $backup_file"
+
+    config_file="$config_dir/${backup_name}.conf"
+    data_file="$data_dir/${backup_name}.tar.gz"
+
+    [ ! -f "$config_file" ] && error "Config backup not found: $config_file"
+    [ ! -f "$data_file" ] && error "Data backup not found: $data_file"
   else
-    # We take the latest file by modification time
-    backup_file=$(find "$backup_dir" -maxdepth 1 -type f -name '*.conf' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)
-    [ -z "$backup_file" ] && error "There are no backups available for recovery"
+    config_file=$(find "$config_dir" -maxdepth 1 -type f -name '*.conf' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)
+    [ -z "$config_file" ] && error "There are no config backups available"
+
+    local base_name
+    base_name=$(basename "$config_file" .conf)
+    data_file="$data_dir/${base_name}.tar.gz"
+
+    [ ! -f "$data_file" ] && error "Data backup not found: $data_file"
   fi
 
-  cp "$backup_file" /etc/samba/smb.conf || error "The configuration could not be restored"
-  systemctl restart smb.service || error "Samba restart error after recovery"
+  if cp "$config_file" /etc/samba/smb.conf; then
+    :
+  else
+    error "Failed to restore smb.conf"
+  fi
 
-  echo "{\"status\": \"restored\", \"message\": \"The configuration was restored from $backup_file\"}"
+  if systemctl restart smb.service; then
+    :
+  else
+    error "Failed to restart Samba after restore"
+  fi
+
+  if tar -xzf "$data_file" -C /; then
+    :
+  else
+    error "Failed to restore data from archive"
+  fi
+
+  echo "{\"status\": \"restored\", \"config\": \"$config_file\", \"data\": \"$data_file\"}"
 }
+
 
 # ========== MAIN SCRIPT ==========
 
@@ -498,10 +536,10 @@ case "$action" in
     update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" 
     ;;
   backup) 
-    backup_config "$backup_name" 
+    backup_all "$backup_name" 
     ;;
   restore) 
-    restore_config "$backup_name" 
+    restore_all "$backup_name" 
     ;;
   *) error "Unknown action: $action" ;;
 esac
