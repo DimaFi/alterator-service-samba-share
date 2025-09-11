@@ -226,14 +226,16 @@ delete_share() {
   local share_path="$2"
 
   [ -z "$share_name" ] || [ -z "$share_path" ] && error "Required parameters for deletion are not set"
+
+  # Check if the share exists in smb.conf
   ! grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] not found"
 
+  # Remove the share configuration block from smb.conf
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
-  [ -d "$share_path" ] && rm -rf "$share_path"
 
-  log "С: systemctl restart smb.service"
+  log "C: systemctl restart smb.service"
   if ! timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1; then
-    error "Couldn't restart restart for smb.service"
+    error "Couldn't restart smb.service"
   fi
 
   echo '{"status": "deleted"}'
