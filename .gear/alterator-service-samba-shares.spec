@@ -1,7 +1,7 @@
 %define _unpackaged_files_terminate_build 1
 %define service service-samba-shares
 Name: alterator-service-samba-shares
-Version: 0.1
+Version: 0.2
 Release: alt1
 
 Summary: Service for managment samba shares
@@ -31,13 +31,18 @@ mkdir -p %buildroot%_localstatedir/alterator/service/%service/backup
 
 install -p -D -m755 src/%service %buildroot%_bindir/%service
 install -p -D -m644 src/%service.backend %buildroot%_alterator_datadir/backends/%service.backend
-install -p -D -m644 src/%service.service %buildroot%_alterator_datadir/service/%service.service
+install -p -D -m644 src/%service.service %buildroot%_alterator_datadir/services/%service.service
 
 %files
 %_alterator_datadir/backends/%service.backend
-%_alterator_datadir/service/%service.service
+%_alterator_datadir/services/%service.service
 %_bindir/%service
 
 %changelog
+* Tue Sep 16 2025 Evgenii Sozonov <arzdez@altlinux.org> 0.2-alt1
+- Fix delete (thx Dmitry Filippenko)
+- Add backup and restore shared folders (thx Dmitry Filippenko)
+- Fix located backups (thx Dmitry Filippenko)
+
 * Tue Jul 26 2025 Dmitry Filippenko <dmitfilippenko@yandex.ru> 0.1-alt1
 - Initial commit
