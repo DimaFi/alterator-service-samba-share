@@ -218,7 +218,13 @@ EOF
     error "Couldn't restart restart for smb.service"
   fi
 
-  echo '{"status": "created"}'
+  echo '{
+    "status": "created",
+    "message": {
+      "ru": "Общая папка успешно создана",
+      "en": "Shared folder successfully created"
+    }
+  }'
 }
 
 delete_share() {
@@ -238,8 +244,15 @@ delete_share() {
     error "Couldn't restart smb.service"
   fi
 
-  echo '{"status": "deleted"}'
+    echo '{
+    "status": "deleted",
+    "message": {
+      "ru": "Общая папка успешно удалена из конфигурации",
+      "en": "Shared folder successfully removed from configuration"
+    }
+  }'
 }
+
 
 update_share() {
   local share_name="$1" 
@@ -304,15 +317,18 @@ deploy_samba_share() {
     alterator-announce "samba_shares" "deployed" || true
   fi
 
-  echo "{
-    \"status\": \"deployed\",
-    \"state\": \"deployed\",
-    \"services\": {
-      \"smb\": \"$(systemctl is-active smb)\",
-      \"nmb\": \"$(systemctl is-active nmb)\"
+  echo '{
+    "status": "deployed",
+    "state": "deployed",
+    "services": {
+      "smb": "active",
+      "nmb": "active"
     },
-    \"message\": \"Samba successfully deployed\"
-  }"
+    "message": {
+      "ru": "Samba успешно развернут. Теперь вы можете предоставить общий доступ к папкам через меню «Настройка» в alt-services.",
+      "en": "Samba successfully deployed. You can now share folders through the 'Settings' menu in alt-services."
+    }
+  }'
 }
 
 undeploy_samba_share() {
@@ -343,7 +359,13 @@ undeploy_samba_share() {
     log "Original smb.conf not found, restore skipped"
   fi
 
-  echo '{"status": "undeployed", "message": "Samba disabled, smb.conf restored"}'
+  echo '{
+    "status": "undeployed",
+    "message": {
+      "ru": "Samba отключен, smb.conf восстановлен",
+      "en": "Samba disabled, smb.conf restored"
+    }
+  }'
 }
 
 start_samba_share() {
@@ -354,7 +376,14 @@ start_samba_share() {
 
   local shares_json
   shares_json=$(get_samba_shares)
-  echo "{\"status\":\"started\", \"shares\": $shares_json}"
+  echo "{
+    \"status\": \"started\",
+    \"shares\": $shares_json,
+    \"message\": {
+      \"ru\": \"Служба Samba запущена\",
+      \"en\": \"Samba service started\"
+    }
+  }"
 }
 
 stop_samba_share() {
@@ -365,7 +394,14 @@ stop_samba_share() {
 
   local shares_json
   shares_json=$(get_samba_shares)
-  echo "{\"status\":\"stopped\", \"shares\": $shares_json}"
+  echo "{
+    \"status\": \"stopped\",
+    \"shares\": $shares_json,
+    \"message\": {
+      \"ru\": \"Служба Samba остановлена\",
+      \"en\": \"Samba service stopped\"
+    }
+  }"
 }
 
 status_samba_share() {
@@ -395,8 +431,13 @@ status_samba_share() {
       \"smb\": \"$smb_status\",
       \"nmb\": \"$nmb_status\"
     },
-    \"shares\": $shares_json
+    \"shares\": $shares_json,
+    \"message\": {
+      \"ru\": \"Состояние Samba: $state\",
+      \"en\": \"Samba state: $state\"
+    }
   }"
+
   exit $exit_code
 }
 
@@ -434,7 +475,15 @@ backup_all() {
     fi
   fi
 
-  echo "{\"status\": \"success\", \"config\": \"$config_file\", \"data\": \"$data_file\"}"
+  echo "{
+    \"status\": \"success\",
+    \"config\": \"$config_file\",
+    \"data\": \"$data_file\",
+    \"message\": {
+      \"ru\": \"Бэкап успешно выполнен\",
+      \"en\": \"Backup completed successfully\"
+    }
+  }"
 }
 
 restore_all() {
@@ -487,7 +536,15 @@ restore_all() {
     error "Failed to restore data from archive"
   fi
 
-  echo "{\"status\": \"restored\", \"config\": \"$config_file\", \"data\": \"$data_file\"}"
+  echo "{
+    \"status\": \"restored\",
+    \"config\": \"$config_file\",
+    \"data\": \"$data_file\",
+    \"message\": {
+      \"ru\": \"Бэкап успешно восстановлен\",
+      \"en\": \"Backup successfully restored\"
+    }
+  }"
 }
 
 
