@@ -75,6 +75,7 @@ comment.ru = "Тип доступа: только чтение (ro) или чт�
 type = "enum"
 default = "ro"
 context = ["configure"]
+required = ["configure"]
 
 [parameters.access_type.values.ro]
 display_name.en = "Read-only"
