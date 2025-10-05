@@ -156,76 +156,84 @@ get_samba_shares() {
 # ======= FUNC FOR ALL ACTION =======
 
 create_share() {
-  local share_name="$1" 
+  local share_name="$1"
   local share_path="$2"
-  local access_user="$3" 
-  local access_type="$4" 
+  local access_user="$3"
+  local access_type="$4"
   local allowed_users="$5"
 
-  log "Create shared folder: $share_name on path $share_path"
+  log "Create shared folder: $share_name on path '$share_path'"
 
-  if [ -z "$share_path" ] || [ -z "$share_name" ] || [ -z "$access_user" ] || [ -z "$access_type" ]; then
+  # Checking required parameters
+  if [ -z "$share_name" ] || [ -z "$share_path" ] || [ -z "$access_user" ] || [ -z "$access_type" ]; then
     error "Required parameters for creation are not set."
   fi
 
-  mkdir -p "$share_path" || error "Couldn't create folder $share_path"
+  # Check the user
+  if ! id "$access_user" >/dev/null 2>&1; then
+      error "User $access_user does not exist"
+  fi
+  local user_group
   user_group=$(id -gn "$access_user")
-  chown -R "$access_user":"$user_group" "$share_path" || error "Couldn't change the owner"
 
-  if command -v setfacl >/dev/null 2>&1; then
-    setfacl -b "$share_path" 2>/dev/null || true
-  fi
+  # Creating a folder with quotes
+  mkdir -p "$share_path" || error "Couldn't create folder '$share_path'"
+  chown -R "$access_user:$user_group" "$share_path" || error "Couldn't set owner $access_user:$user_group"
 
-  local writable="no"
+  # Folder permissions
   if [ "$access_type" == "rw" ]; then
-    chmod 2770 "$share_path" || error "Couldn't set rights 2770"
-    writable="yes"
+    chmod 2770 "$share_path" || error "Couldn't set permissions 2770"
   else
-    chmod 2750 "$share_path" || error "Couldn't set rights 2750"
+    chmod 2750 "$share_path" || error "Couldn't set permissions 2750"
   fi
 
-  [ "$access_type" == "rw" ] && [ ! -w "$share_path" ] && error "Folder $share_path not available for recording after rights have been set"
+  # Clearing ACLs
+  command -v setfacl >/dev/null 2>&1 && setfacl -b "$share_path" 2>/dev/null || true
 
+  # Checking the existence of a share in smb.conf
   grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] already exists"
 
+  # Generate a list of valid users
   local valid_users="$access_user"
-  if [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ]; then
-    valid_users="$access_user,$allowed_users"
-  fi
+  [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ] && valid_users="$access_user,$allowed_users"
 
-
+  # Add an entry to smb.conf
   local TEMP_FILE
   TEMP_FILE=$(mktemp)
   cp /etc/samba/smb.conf "$TEMP_FILE"
-
   cat <<EOF >> "$TEMP_FILE"
 
 [$share_name]
    path = $share_path
    browsable = yes
-   writable = $writable
+   writable = $( [ "$access_type" == "rw" ] && echo yes || echo no )
    guest ok = no
    valid users = $valid_users
 EOF
 
   testparm -s "$TEMP_FILE" >/dev/null || { rm -f "$TEMP_FILE"; error "Configuration error in smb.conf"; }
-
   mv "$TEMP_FILE" /etc/samba/smb.conf
   chmod 644 /etc/samba/smb.conf
 
   log "Running: systemctl restart smb.service"
-  if ! timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1; then
-    error "Couldn't restart restart for smb.service"
-  fi
+  timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1 || error "Couldn't restart smb.service"
 
-  echo '{
-    "status": "created",
-    "message": {
-      "ru": "Общая папка успешно создана",
-      "en": "Shared folder successfully created"
+  local deployed started
+  systemctl is-active smb.service >/dev/null 2>&1 && deployed=true || deployed=false
+  systemctl is-active smb.service >/dev/null 2>&1 && started=true || started=false
+
+  echo "{
+    \"status\": \"created\",
+    \"deployed\": $deployed,
+    \"started\": $started,
+    \"message\": {
+      \"ru\": \"Общая папка успешно создана\",
+      \"en\": \"Shared folder successfully created\"
     }
-  }'
+  }"
 }
+
+
 
 delete_share() {
   local share_name="$1"
@@ -233,10 +241,12 @@ delete_share() {
 
   [ -z "$share_name" ] || [ -z "$share_path" ] && error "Required parameters for deletion are not set"
 
-  # Check if the share exists in smb.conf
-  ! grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] not found"
+  # Checking if a share exists
+  if ! grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
+    error "Shared folder [$share_name] not found"
+  fi
 
-  # Remove the share configuration block from smb.conf
+  # Checking if a share exists
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
 
   log "C: systemctl restart smb.service"
@@ -244,61 +254,75 @@ delete_share() {
     error "Couldn't restart smb.service"
   fi
 
-    echo '{
-    "status": "deleted",
-    "message": {
-      "ru": "Общая папка успешно удалена из конфигурации",
-      "en": "Shared folder successfully removed from configuration"
+  local deployed started
+  systemctl is-active smb.service >/dev/null 2>&1 && deployed=true || deployed=false
+  systemctl is-active smb.service >/dev/null 2>&1 && started=true || started=false
+
+  echo "{
+    \"status\": \"deleted\",
+    \"deployed\": $deployed,
+    \"started\": $started,
+    \"message\": {
+      \"ru\": \"Общая папка успешно удалена из конфигурации\",
+      \"en\": \"Shared folder successfully removed from configuration\"
     }
-  }'
+  }"
 }
 
 
 update_share() {
-  local share_name="$1" 
-  local share_path="$2" 
-  local access_user="$3" 
-  local access_type="$4" 
+  local share_name="$1"
+  local share_path="$2"
+  local access_user="$3"
+  local access_type="$4"
   local allowed_users="$5"
 
-  [ -z "$share_name" ] || [ -z "$share_path" ] || [ -z "$access_user" ] || [ -z "$access_type" ] && error "There are not enough parameters to update"
+  [ -z "$share_name" ] || [ -z "$share_path" ] || [ -z "$access_type" ] && error "Not enough parameters to update"
 
+  # Delete the old section
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
 
-  local valid_users="$access_user"
-  [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ] && valid_users="$allowed_users"
+  # Create a folder and permissions
+  mkdir -p "$share_path"
+  if [ "$access_type" == "guest" ]; then
+    chmod 0777 "$share_path"
+    chown nobody:nogroup "$share_path"
+  else
+    id "$access_user" >/dev/null 2>&1 || useradd -m "$access_user"
+    user_group=$(id -gn "$access_user")
+    chown -R "$access_user":"$user_group" "$share_path"
+    chmod 2770 "$share_path"
+  fi
 
-  local writable="no"
-  [ "$access_type" == "rw" ] && writable="yes"
+  # Forming the smb.conf block
+  valid_users="$access_user"
+  [ -n "$allowed_users" ] && valid_users="$access_user,$allowed_users"
 
   cat <<EOF >> /etc/samba/smb.conf
 
 [$share_name]
    path = $share_path
    browsable = yes
-   writable = $writable
-   guest ok = no
+   writable = $( [ "$access_type" == "rw" ] && echo yes || echo no )
+   guest ok = $( [ "$access_type" == "guest" ] && echo yes || echo no )
    valid users = $valid_users
 EOF
 
-  testparm -s /etc/samba/smb.conf >/dev/null || error "Configuration error"
+  testparm -s /etc/samba/smb.conf >/dev/null || error "Configuration error in smb.conf"
 
-  mkdir -p "$share_path"
-  chown -R "$access_user":"users" "$share_path"
+  systemctl restart smb.service >> "$LOG_FILE" 2>&1 || error "Couldn't restart smb.service"
 
-  if command -v setfacl >/dev/null 2>&1; then
-    setfacl -b "$share_path" 2>/dev/null || true
-  fi
-
-  if [ "$access_type" == "rw" ]; then
-    chmod 2770 "$share_path"
-  else
-    chmod 2750 "$share_path"
-  fi
-
-
-  [ "$access_type" == "rw" ] && [ ! -w "$share_path" ] && error "Folder $share_path unavailable for recording"
+  echo "{
+    \"status\": \"updated\",
+    \"deployed\": $(systemctl is-active smb.service >/dev/null && echo true || echo false),
+    \"started\": $(systemctl is-active smb.service >/dev/null && echo true || echo false),
+    \"message\": {
+      \"ru\": \"Общая папка успешно обновлена\",
+      \"en\": \"Shared folder successfully updated\"
+    }
+  }"
 }
+
 
 deploy_samba_share() {
   command -v smbd >/dev/null || error "Samba not installed"
@@ -320,6 +344,8 @@ deploy_samba_share() {
   echo '{
     "status": "deployed",
     "state": "deployed",
+    "deployed": true,
+    "started": true,
     "services": {
       "smb": "active",
       "nmb": "active"
@@ -361,6 +387,8 @@ undeploy_samba_share() {
 
   echo '{
     "status": "undeployed",
+    "deployed": true,
+    "started": true,
     "message": {
       "ru": "Samba отключен, smb.conf восстановлен",
       "en": "Samba disabled, smb.conf restored"

@@ -176,3 +176,11 @@ display_name.en = "Allowed Users"
 display_name.ru = "Разрешённые пользователи"
 type = "string"
 
+[parameters.guest_access]
+display_name.en = "Anonymous Access"
+display_name.ru = "Анонимный доступ"
+comment.en = "Allow anyone to access this share without login"
+comment.ru = "Разрешить доступ к шаре без логина"
+type = "boolean"
+default = false
+context = ["configure"]
