@@ -153,6 +153,40 @@ get_samba_shares() {
   ' 
 }
 
+get_fs_owner() {
+  local p="$1"
+  [ -e "$p" ] || { echo ""; return; }
+  if command -v getfacl >/dev/null 2>&1; then
+    getfacl -p --absolute-names "$p" 2>/dev/null | awk -F': ' '/^# owner:/{print $2; exit}'
+  else
+    stat -c '%U' "$p" 2>/dev/null || echo ""
+  fi
+}
+
+augment_shares_with_owner() {
+  local json="$1"
+  echo "$json" | jq -c '.[]' | while read -r item; do
+    local path owner
+    path=$(echo "$item" | jq -r '.share_path')
+    owner=$(get_fs_owner "$path")
+    if [ -n "$owner" ]; then
+      echo "$item" | jq --arg owner "$owner" '. + {access_user: $owner}'
+    else
+      echo "$item"
+    fi
+  done | jq -s '.'
+}
+
+get_share_current() {
+  local name="$1"
+  local cur
+  cur=$(augment_shares_with_owner "$(get_samba_shares)" | jq -c --arg n "$name" '.[] | select(.share_name==$n)')
+  [ -z "$cur" ] && error "Share not found: $name"
+  echo "$cur"
+}
+
+
+
 # ======= FUNC FOR ALL ACTION =======
 
 create_share() {
@@ -222,10 +256,14 @@ EOF
   systemctl is-active smb.service >/dev/null 2>&1 && deployed=true || deployed=false
   systemctl is-active smb.service >/dev/null 2>&1 && started=true || started=false
 
+  local shares_json
+  shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
+
   echo "{
     \"status\": \"created\",
     \"deployed\": $deployed,
     \"started\": $started,
+    \"shares\": $shares_json,
     \"message\": {
       \"ru\": \"Общая папка успешно создана\",
       \"en\": \"Shared folder successfully created\"
@@ -233,42 +271,79 @@ EOF
   }"
 }
 
-
-
 delete_share() {
   local share_name="$1"
-  local share_path="$2"
+  [ -z "$share_name" ] && error "Required parameters for deletion are not set"
 
-  [ -z "$share_name" ] || [ -z "$share_path" ] && error "Required parameters for deletion are not set"
+  # Normalize the name: remove the spaces at the edges
+  share_name="$(printf '%s' "$share_name" | awk '{$1=$1; print}')"
+  log "Delete request for share: '$share_name'"
 
-  # Checking if a share exists
-  if ! grep -q "^\[$share_name\]" /etc/samba/smb.conf; then
+  # check the existence of the balls through testparm -s ---
+  # List of all sections except [global]
+  local exists
+  exists=$(testparm -s 2>/dev/null \
+    | awk '
+        /^\[.*\]$/ {
+          name=substr($0,2,length($0)-2);
+          gsub(/^[ \t]+|[ \t]+$/, "", name);
+          if (tolower(name)!="global") print name;
+        }' \
+    | awk -v tgt="$share_name" 'BEGIN{f=0} { if($0==tgt) f=1 } END{ print f }')
+
+  if [ "$exists" != "1" ]; then
     error "Shared folder [$share_name] not found"
   fi
 
-  # Checking if a share exists
-  sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
+  # Delete the section as a block, resistant to the absence of empty lines
+  local TMP
+  TMP=$(mktemp) || error "Cannot create temp file"
 
-  log "C: systemctl restart smb.service"
-  if ! timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1; then
-    error "Couldn't restart smb.service"
+  awk -v target="$share_name" '
+    function trim(s){ gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    BEGIN { insec=0 }
+    /^\[.*\]$/ {
+      # встретили заголовок секции
+      hdr = substr($0, 2, length($0)-2);
+      hdr = trim(hdr);
+      # если до этого были внутри целевой — выходим из неё
+      if (insec) { insec=0 }
+      # если это целевая — включаем пропуск
+      if (hdr == target) { insec=1; next }
+    }
+    # если в целевой секции — пропускаем строки
+    insec { next }
+    # иначе печатаем как есть
+    { print }
+  ' /etc/samba/smb.conf > "$TMP" || { rm -f "$TMP"; error "Failed to edit smb.conf"; }
+
+  # Validate and apply
+  if ! testparm -s "$TMP" >/dev/null 2>&1; then
+    rm -f "$TMP"
+    error "Configuration error after deletion (testparm failed)"
   fi
 
-  local deployed started
-  systemctl is-active smb.service >/dev/null 2>&1 && deployed=true || deployed=false
-  systemctl is-active smb.service >/dev/null 2>&1 && started=true || started=false
+  mv "$TMP" /etc/samba/smb.conf || { rm -f "$TMP"; error "Failed to update smb.conf"; }
+  chmod 644 /etc/samba/smb.conf || true
+
+  # Restart and reply
+  log "Restarting smb.service after delete"
+  timeout 15 systemctl restart smb.service >> "$LOG_FILE" 2>&1 || error "Couldn't restart smb.service"
+
+  local shares_json
+  shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
 
   echo "{
     \"status\": \"deleted\",
-    \"deployed\": $deployed,
-    \"started\": $started,
+    \"deployed\": $(systemctl is-active smb.service >/dev/null && echo true || echo false),
+    \"started\":  $(systemctl is-active smb.service >/dev/null && echo true || echo false),
+    \"shares\": $shares_json,
     \"message\": {
       \"ru\": \"Общая папка успешно удалена из конфигурации\",
       \"en\": \"Shared folder successfully removed from configuration\"
     }
   }"
 }
-
 
 update_share() {
   local share_name="$1"
@@ -277,43 +352,71 @@ update_share() {
   local access_type="$4"
   local allowed_users="$5"
 
-  [ -z "$share_name" ] || [ -z "$share_path" ] || [ -z "$access_type" ] && error "Not enough parameters to update"
+  [ -z "$share_name" ] && error "share_name is required for update"
 
-  # Delete the old section
+  # Current values from the configuration/FS
+  local cur
+  cur=$(get_share_current "$share_name")
+
+  # We'll substitute everything that didn't arrive
+  [ -z "$share_path" ]   && share_path=$(echo "$cur" | jq -r '.share_path')
+  [ -z "$access_user" ]  && access_user=$(echo "$cur" | jq -r '.access_user // empty')
+  [ -z "$access_type" ]  && access_type=$(echo "$cur" | jq -r '.access_type // "ro"')
+  [ -z "$allowed_users" ]&& allowed_users=$(echo "$cur" | jq -r '.allowed_users // empty')
+
+  # Validation of totals
+  [ -z "$share_path" ]  && error "share_path unresolved"
+  [ -z "$access_type" ] && error "access_type unresolved"
+  if [ "$access_type" != "guest" ]; then
+    [ -z "$access_user" ] && error "access_user is required for non-guest share"
+  fi
+
+  # Re-creating the section (as before)
   sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
 
-  # Create a folder and permissions
   mkdir -p "$share_path"
-  if [ "$access_type" == "guest" ]; then
+  if [ "$access_type" = "guest" ]; then
     chmod 0777 "$share_path"
     chown nobody:nogroup "$share_path"
   else
     id "$access_user" >/dev/null 2>&1 || useradd -m "$access_user"
+    local user_group
     user_group=$(id -gn "$access_user")
     chown -R "$access_user":"$user_group" "$share_path"
     chmod 2770 "$share_path"
   fi
 
-  # Forming the smb.conf block
-  valid_users="$access_user"
-  [ -n "$allowed_users" ] && valid_users="$access_user,$allowed_users"
+  local valid_users
+  if [ "$access_type" = "guest" ]; then
+    valid_users=""
+  else
+    valid_users="$access_user"
+    [ -n "$allowed_users" ] && valid_users="$access_user,$allowed_users"
+  fi
 
-  cat <<EOF >> /etc/samba/smb.conf
-
-[$share_name]
-   path = $share_path
-   browsable = yes
-   writable = $( [ "$access_type" == "rw" ] && echo yes || echo no )
-   guest ok = $( [ "$access_type" == "guest" ] && echo yes || echo no )
-   valid users = $valid_users
-EOF
+  {
+    echo
+    echo "[$share_name]"
+    echo "   path = $share_path"
+    echo "   browsable = yes"
+    if [ "$access_type" = "guest" ]; then
+      echo "   writable = yes"
+      echo "   guest ok = yes"
+    else
+      echo "   writable = $( [ "$access_type" = "rw" ] && echo yes || echo no )"
+      echo "   guest ok = no"
+      echo "   valid users = $valid_users"
+    fi
+  } >> /etc/samba/smb.conf
 
   testparm -s /etc/samba/smb.conf >/dev/null || error "Configuration error in smb.conf"
-
   systemctl restart smb.service >> "$LOG_FILE" 2>&1 || error "Couldn't restart smb.service"
 
+  local shares_json
+  shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
   echo "{
     \"status\": \"updated\",
+    \"shares\": $shares_json,
     \"deployed\": $(systemctl is-active smb.service >/dev/null && echo true || echo false),
     \"started\": $(systemctl is-active smb.service >/dev/null && echo true || echo false),
     \"message\": {
@@ -403,7 +506,7 @@ start_samba_share() {
   fi
 
   local shares_json
-  shares_json=$(get_samba_shares)
+  shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
   echo "{
     \"status\": \"started\",
     \"shares\": $shares_json,
@@ -421,7 +524,7 @@ stop_samba_share() {
   fi
 
   local shares_json
-  shares_json=$(get_samba_shares)
+  shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
   echo "{
     \"status\": \"stopped\",
     \"shares\": $shares_json,
@@ -450,7 +553,7 @@ status_samba_share() {
     state="undeployed"; exit_code=0
   fi
 
-  shares_json=$(get_samba_shares)
+  shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
 
   echo "{
     \"status\": \"$state\",
@@ -471,166 +574,230 @@ status_samba_share() {
 
 backup_all() {
   local backup_name="$1"
-  local config_dir="/var/lib/alterator/service/service-samba-share/config-backup"
-  local data_dir="/var/lib/alterator/service/service-samba-share/data-backup"
+
+  # Backup storage directories (left the same as before)
+  local base_dir="/var/lib/alterator/service/service-samba-share"
+  local config_dir="$base_dir/config-backup"
+  local data_dir="$base_dir/data-backup"
 
   mkdir -p "$config_dir" "$data_dir" || error "Failed to create backup directories"
 
+  # Backup name
   if [ -z "$backup_name" ] || [ "$backup_name" = "null" ]; then
-    local timestamp
-    timestamp=$(date '+%Y%m%d-%H%M%S')
-    backup_name="smb-$timestamp"
+    local ts
+    ts=$(date '+%Y%m%d-%H%M%S')
+    backup_name="smb-$ts"
   fi
 
   local config_file="$config_dir/${backup_name}.conf"
   local data_file="$data_dir/${backup_name}.tar.gz"
 
-  if cp /etc/samba/smb.conf "$config_file"; then
-    :
-  else
+  # Configuration backup — always
+  if ! cp /etc/samba/smb.conf "$config_file"; then
     error "Failed to create config backup"
   fi
 
-  # getting a list of paths from smb.conf via testparm and jq
-  local shares
-  shares=$(get_samba_shares | jq -r '.[].share_path')
+  # Collecting balloon paths from the current configuration
+  # - neat, one line at a time, unique
+  # - filter out empty and non-existent ones
+  local list
+  list=$(mktemp) || error "Cannot create temp file"
+  get_samba_shares \
+    | jq -r '.[].share_path' \
+    | sed '/^$/d' \
+    | sort -u \
+    | while IFS= read -r p; do
+        # backup only the actual paths
+        if [ -e "$p" ]; then
+          printf '%s\0' "$p"
+        fi
+      done \
+    > "$list"
 
-  if [ -n "$shares" ]; then
-    if tar -czf "$data_file" $shares; then
-      :
+  local made_data=false
+  if [ -s "$list" ]; then
+    if tar --null -czf "$data_file" --files-from="$list"; then
+      made_data=true
     else
+      rm -f "$list"
       error "Failed to create data archive"
     fi
   fi
+  rm -f "$list"
 
-  echo "{
-    \"status\": \"success\",
-    \"config\": \"$config_file\",
-    \"data\": \"$data_file\",
-    \"message\": {
-      \"ru\": \"Бэкап успешно выполнен\",
-      \"en\": \"Backup completed successfully\"
-    }
-  }"
+  if $made_data; then
+    echo "{
+      \"status\": \"success\",
+      \"config\": \"$config_file\",
+      \"data\": \"$data_file\",
+      \"message\": {
+        \"ru\": \"Бэкап успешно выполнен\",
+        \"en\": \"Backup completed successfully\"
+      }
+    }"
+  else
+    echo "{
+      \"status\": \"success\",
+      \"config\": \"$config_file\",
+      \"data\": null,
+      \"message\": {
+        \"ru\": \"Бэкап конфигурации выполнен (шар с данными не найдено, архив данных не создавался)\",
+        \"en\": \"Config backup completed (no share data to archive)\"
+      }
+    }"
+  fi
 }
+
 
 restore_all() {
   local backup_name="$1"
-  local config_dir="/var/lib/alterator/service/service-samba-share/config-backup"
-  local data_dir="/var/lib/alterator/service/service-samba-share/data-backup"
+
+  local base_dir="/var/lib/alterator/service/service-samba-share"
+  local config_dir="$base_dir/config-backup"
+  local data_dir="$base_dir/data-backup"
 
   mkdir -p "$config_dir" "$data_dir" || error "Failed to create backup directories"
 
   local config_file
   local data_file
 
+  # Find backup
   if [ -n "$backup_name" ] && [ "$backup_name" != "null" ]; then
     case "$backup_name" in
-      *.conf) backup_name="${backup_name%.conf}" ;;
+      *.conf)   backup_name="${backup_name%.conf}" ;;
       *.tar.gz) backup_name="${backup_name%.tar.gz}" ;;
     esac
-
     config_file="$config_dir/${backup_name}.conf"
     data_file="$data_dir/${backup_name}.tar.gz"
 
     [ ! -f "$config_file" ] && error "Config backup not found: $config_file"
-    [ ! -f "$data_file" ] && error "Data backup not found: $data_file"
   else
-    config_file=$(find "$config_dir" -maxdepth 1 -type f -name '*.conf' -printf '%T@ %p\n' 2>/dev/null | sort -nr | head -n1 | cut -d' ' -f2-)
+    # We take the most recent config backup.
+    config_file=$(find "$config_dir" -maxdepth 1 -type f -name '*.conf' -printf '%T@ %p\n' 2>/dev/null \
+                  | sort -nr | head -n1 | cut -d' ' -f2-)
     [ -z "$config_file" ] && error "There are no config backups available"
 
     local base_name
     base_name=$(basename "$config_file" .conf)
     data_file="$data_dir/${base_name}.tar.gz"
-
-    [ ! -f "$data_file" ] && error "Data backup not found: $data_file"
   fi
 
-  if cp "$config_file" /etc/samba/smb.conf; then
-    :
-  else
+  # restore smb.conf
+  if ! cp "$config_file" /etc/samba/smb.conf; then
     error "Failed to restore smb.conf"
   fi
 
-  if systemctl restart smb.service; then
-    :
-  else
+  # check the configuration for validity
+  if ! testparm -s /etc/samba/smb.conf >/dev/null 2>&1; then
+    error "Restored smb.conf is invalid (testparm failed)"
+  fi
+
+  if ! systemctl restart smb.service; then
     error "Failed to restart Samba after restore"
   fi
 
-  if tar -xzf "$data_file" -C /; then
-    :
-  else
-    error "Failed to restore data from archive"
+  # Data recovery — only if the archive exists
+  local restored_data=false
+  if [ -f "$data_file" ]; then
+    if tar -xzf "$data_file" -C /; then
+      restored_data=true
+    else
+      error "Failed to restore data from archive"
+    fi
   fi
 
-  echo "{
-    \"status\": \"restored\",
-    \"config\": \"$config_file\",
-    \"data\": \"$data_file\",
-    \"message\": {
-      \"ru\": \"Бэкап успешно восстановлен\",
-      \"en\": \"Backup successfully restored\"
-    }
-  }"
+  if $restored_data; then
+    echo "{
+      \"status\": \"restored\",
+      \"config\": \"$config_file\",
+      \"data\": \"$data_file\",
+      \"message\": {
+        \"ru\": \"Бэкап успешно восстановлен (конфиг и данные)\",
+        \"en\": \"Backup successfully restored (config and data)\"
+      }
+    }"
+  else
+    echo "{
+      \"status\": \"restored\",
+      \"config\": \"$config_file\",
+      \"data\": null,
+      \"message\": {
+        \"ru\": \"Восстановлен только конфиг (архив данных не найден — это нормально)\",
+        \"en\": \"Restored config only (data archive not found, which is fine)\"
+      }
+    }"
+  fi
 }
+
 
 
 # ========== MAIN SCRIPT ==========
 
 log "---Run script---"
-
 [ "$EUID" -ne 0 ] && error "Root required"
 
+# reading JSON from stdin (or "{}" by timeout)
 read -t 10 -r input || { log "Timeout when reading input data"; input="{}"; }
 log "Input data is received: $input"
 
-action=$(echo "$input" | jq -r '.operation // empty')
-[ -z "$action" ] && action="$1"
-[ -z "$action" ] && error "The field is not specified 'operation'"
+operation=$(echo "$input" | jq -r '.operation // empty')
+[ -z "$operation" ] && operation="$1"
 
-share_name=$(echo "$input" | jq -r '.share_name // empty')
-share_path=$(echo "$input" | jq -r '.share_path // empty')
-access_user=$(echo "$input" | jq -r '.access_user // empty')
-access_type=$(echo "$input" | jq -r '.access_type // empty')
-allowed_users=$(echo "$input" | jq -r '.allowed_users // empty')
+
+# CREATE
+c_share_name=$(echo "$input" | jq -r '.create.share_name // empty')
+c_share_path=$(echo "$input" | jq -r '.create.share_path // empty')
+c_access_user=$(echo "$input" | jq -r '.create.access_user // empty')
+c_access_type=$(echo "$input" | jq -r '.create.access_type // empty')
+c_allowed_users=$(echo "$input" | jq -r '.create.allowed_users // empty')
+
+# UPDATE
+u_share_name=$(echo "$input" | jq -r '.update.share_name // empty')
+u_share_path=$(echo "$input" | jq -r '.update.share_path // empty')
+u_access_user=$(echo "$input" | jq -r '.update.access_user // empty')
+u_access_type=$(echo "$input" | jq -r '.update.access_type // empty')
+u_allowed_users=$(echo "$input" | jq -r '.update.allowed_users // empty')
+
+# DELETE
+d_share_name=$(echo "$input" | jq -r '.delete.share_name // empty')
+
 backup_name=$(echo "$input" | jq -r '.backup_name // empty')
 
+case "$operation" in
+  create)
+    # мminimal validation
+    [ -z "$c_share_name"  ] && error "create.share_name is required"
+    [ -z "$c_share_path"  ] && error "create.share_path is required"
+    [ -z "$c_access_user" ] && error "create.access_user is required"
+    [ -z "$c_access_type" ] && error "create.access_type is required"
+    create_share "$c_share_name" "$c_share_path" "$c_access_user" "$c_access_type" "$c_allowed_users"
+    ;;
 
-case "$action" in
-  create) 
-    create_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" 
+  update)
+    [ -z "$u_share_name" ] && error "update.share_name is required"
+    update_share "$u_share_name" "$u_share_path" "$u_access_user" "$u_access_type" "$u_allowed_users"
     ;;
-  delete) 
-    delete_share "$share_name" "$share_path" 
+
+  delete)
+    [ -z "$d_share_name" ] && error "delete.share_name is required"
+    delete_share "$d_share_name"
     ;;
-  deploy) 
-    deploy_samba_share
+
+  status|"")
+    status_samba_share
     ;;
-  undeploy) 
-    undeploy_samba_share
+
+  deploy)   deploy_samba_share ;;
+  undeploy) undeploy_samba_share ;;
+  start)    start_samba_share ;;
+  stop)     stop_samba_share ;;
+  backup)   backup_all "$backup_name" ;;
+  restore)  restore_all "$backup_name" ;;
+
+  *)
+    error "Unknown operation: $operation"
     ;;
-  start) 
-    start_samba_share
-    ;;
-  stop) 
-    stop_samba_share
-    ;;
-  status) 
-    status_samba_share 
-    ;;
-  update) 
-    update_share "$share_name" "$share_path" "$access_user" "$access_type" "$allowed_users" 
-    ;;
-  backup) 
-    backup_all "$backup_name" 
-    ;;
-  restore) 
-    restore_all "$backup_name" 
-    ;;
-  *) error "Unknown action: $action" ;;
 esac
 
 log "The script has been successfully completed"
-# release_lock
 exit 0
