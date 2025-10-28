@@ -185,6 +185,36 @@ get_share_current() {
   echo "$cur"
 }
 
+remove_share_section() {
+  local share_name="$1"
+  local conf="/etc/samba/smb.conf"
+  local TMP
+  TMP=$(mktemp) || error "Cannot create temp file"
+
+  awk -v target="$share_name" '
+    function trim(s){ gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
+    BEGIN { insec=0 }
+    /^\[.*\]$/ {
+      # встретили заголовок секции
+      hdr = substr($0, 2, length($0)-2);
+      hdr = trim(hdr);
+      # если до этого были внутри целевой — выходим из неё
+      if (insec) { insec=0 }
+      # если это целевая — включаем пропуск
+      if (hdr == target) { insec=1; next }
+    }
+    # если в целевой секции — пропускаем строки
+    insec { next }
+    # иначе печатаем как есть
+    { print }
+  ' "$conf" > "$TMP" || { rm -f "$TMP"; error "Failed to edit smb.conf"; }
+
+  # Валидация и применение
+  testparm -s "$TMP" >/dev/null 2>&1 || { rm -f "$TMP"; error "Configuration error after section removal"; }
+  mv "$TMP" "$conf" || { rm -f "$TMP"; error "Failed to update smb.conf"; }
+  chmod 0644 "$conf" || true
+}
+
 
 
 # ======= FUNC FOR ALL ACTION =======
@@ -235,6 +265,9 @@ create_share() {
   local TEMP_FILE
   TEMP_FILE=$(mktemp)
   cp /etc/samba/smb.conf "$TEMP_FILE"
+
+  tail -c1 /etc/samba/smb.conf | read -r _ || echo >> /etc/samba/smb.conf
+
   cat <<EOF >> "$TEMP_FILE"
 
 [$share_name]
@@ -303,17 +336,17 @@ delete_share() {
     function trim(s){ gsub(/^[ \t]+|[ \t]+$/, "", s); return s }
     BEGIN { insec=0 }
     /^\[.*\]$/ {
-      # встретили заголовок секции
+      # met the section title
       hdr = substr($0, 2, length($0)-2);
       hdr = trim(hdr);
-      # если до этого были внутри целевой — выходим из неё
+      # if you were inside the target area before, get out of it
       if (insec) { insec=0 }
-      # если это целевая — включаем пропуск
+      # if this is the target, enable the pass
       if (hdr == target) { insec=1; next }
     }
-    # если в целевой секции — пропускаем строки
+    # if it is in the target section, skip the lines
     insec { next }
-    # иначе печатаем как есть
+    # otherwise, we print it as it is.
     { print }
   ' /etc/samba/smb.conf > "$TMP" || { rm -f "$TMP"; error "Failed to edit smb.conf"; }
 
@@ -371,8 +404,8 @@ update_share() {
     [ -z "$access_user" ] && error "access_user is required for non-guest share"
   fi
 
-  # Re-creating the section (as before)
-  sed -i "/^\[$share_name\]/,/^$/d" /etc/samba/smb.conf
+  # Re-creating the section 
+  remove_share_section "$share_name"
 
   mkdir -p "$share_path"
   if [ "$access_type" = "guest" ]; then
@@ -393,6 +426,8 @@ update_share() {
     valid_users="$access_user"
     [ -n "$allowed_users" ] && valid_users="$access_user,$allowed_users"
   fi
+
+  tail -c1 /etc/samba/smb.conf | read -r _ || echo >> /etc/samba/smb.conf
 
   {
     echo
