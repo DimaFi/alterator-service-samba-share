@@ -11,7 +11,7 @@ comment.ru = "Для управления общими папками Samba"
 enable_force_deploy = true
 no_default_diag = true
 
-# -------- STATUS ----------
+# -------- STATUS: список шар ----------
 [parameters.shares]
 display_name.en = "Samba Shares"
 display_name.ru = "Общие папки Samba"
@@ -90,21 +90,29 @@ context = ["configure"]
 [parameters.create.properties.share_name]
 display_name.en = "Share Name"
 display_name.ru = "Имя общей папки"
+comment.en = "Unique name of the Samba share"
+comment.ru = "Уникальное имя общей папки Samba"
 type = "string"
 
 [parameters.create.properties.share_path]
 display_name.en = "Share Path"
 display_name.ru = "Путь к папке"
+comment.en = "Filesystem path to the shared folder"
+comment.ru = "Путь к каталогу, который будет расшарен"
 type = "string"
 
 [parameters.create.properties.access_user]
 display_name.en = "Owner (Access User)"
 display_name.ru = "Владелец (Пользователь)"
+comment.en = "User who will own the folder and have access"
+comment.ru = "Пользователь, которому принадлежит папка и который имеет доступ"
 type = "string"
 
 [parameters.create.properties.access_type]
 display_name.en = "Access Type"
 display_name.ru = "Тип доступа"
+comment.en = "Access permission: read-only (ro) or read-write (rw)"
+comment.ru = "Тип доступа: только чтение (ro) или чтение и запись (rw)"
 type = "enum"
 default = "ro"
 [parameters.create.properties.access_type.values.ro]
@@ -117,6 +125,8 @@ display_name.ru = "Чтение и запись"
 [parameters.create.properties.allowed_users]
 display_name.en = "Allowed Users (comma-separated)"
 display_name.ru = "Разрешённые пользователи (через запятую)"
+comment.en = "Comma-separated list of users allowed to access this share"
+comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
 
 # -------- UPDATE section ----------
@@ -131,21 +141,29 @@ context = ["configure"]
 [parameters.update.properties.share_name]
 display_name.en = "Share Name (required)"
 display_name.ru = "Имя общей папки (обязательно)"
+comment.en = "Unique name of the Samba share"
+comment.ru = "Уникальное имя общей папки Samba"
 type = "string"
 
 [parameters.update.properties.share_path]
 display_name.en = "New Share Path"
 display_name.ru = "Новый путь к папке"
+comment.en = "Filesystem path to the shared folder"
+comment.ru = "Путь к каталогу, который будет расшарен"
 type = "string"
 
 [parameters.update.properties.access_user]
 display_name.en = "New Owner (Access User)"
 display_name.ru = "Новый владелец (Пользователь)"
+comment.en = "User who will own the folder and have access"
+comment.ru = "Пользователь, которому принадлежит папка и который имеет доступ"
 type = "string"
 
 [parameters.update.properties.access_type]
 display_name.en = "New Access Type"
 display_name.ru = "Новый тип доступа"
+comment.en = "Access permission: read-only (ro) or read-write (rw)"
+comment.ru = "Тип доступа: только чтение (ro) или чтение и запись (rw)"
 type = "enum"
 [parameters.update.properties.access_type.values.ro]
 display_name.en = "Read-only"
@@ -160,6 +178,8 @@ display_name.ru = "Гостевой доступ"
 [parameters.update.properties.allowed_users]
 display_name.en = "New Allowed Users (comma-separated)"
 display_name.ru = "Новые разрешённые пользователи (через запятую)"
+comment.en = "Comma-separated list of users allowed to access this share"
+comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
 
 # -------- DELETE section ----------
@@ -174,6 +194,8 @@ context = ["configure"]
 [parameters.delete.properties.share_name]
 display_name.en = "Share Name (required)"
 display_name.ru = "Имя общей папки (обязательно)"
+comment.en = "Unique name of the Samba share"
+comment.ru = "Уникальное имя общей папки Samba"
 type = "string"
 
 # ---------------- Resources ----------------
