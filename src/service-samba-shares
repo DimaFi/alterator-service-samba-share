@@ -209,10 +209,20 @@ remove_share_section() {
     { print }
   ' "$conf" > "$TMP" || { rm -f "$TMP"; error "Failed to edit smb.conf"; }
 
-  # Валидация и применение
   testparm -s "$TMP" >/dev/null 2>&1 || { rm -f "$TMP"; error "Configuration error after section removal"; }
   mv "$TMP" "$conf" || { rm -f "$TMP"; error "Failed to update smb.conf"; }
   chmod 0644 "$conf" || true
+}
+
+csv_to_lines() {
+  tr ',' '\n' \
+  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+  | sed '/^$/d' \
+  | awk '!seen[$0]++'
+}
+
+join_csv() {
+  paste -sd',' -
 }
 
 
@@ -258,8 +268,14 @@ create_share() {
   grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] already exists"
 
   # Generate a list of valid users
-  local valid_users="$access_user"
-  [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ] && valid_users="$access_user,$allowed_users"
+  # local valid_users="$access_user"
+  # [ -n "$allowed_users" ] && [ "$allowed_users" != "null" ] && valid_users="$access_user,$allowed_users"
+
+  valid_users=$(printf '%s' "$access_user${allowed_users:+,$allowed_users}" \
+    | tr ',' '\n' \
+    | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+    | awk '!seen[$0]++' \
+    | paste -sd',' -)
 
   # Add an entry to smb.conf
   local TEMP_FILE
@@ -384,6 +400,7 @@ update_share() {
   local access_user="$3"
   local access_type="$4"
   local allowed_users="$5"
+  local u_delete_prev_allowed="$6"
 
   [ -z "$share_name" ] && error "share_name is required for update"
 
@@ -395,13 +412,51 @@ update_share() {
   [ -z "$share_path" ]   && share_path=$(echo "$cur" | jq -r '.share_path')
   [ -z "$access_user" ]  && access_user=$(echo "$cur" | jq -r '.access_user // empty')
   [ -z "$access_type" ]  && access_type=$(echo "$cur" | jq -r '.access_type // "ro"')
-  [ -z "$allowed_users" ]&& allowed_users=$(echo "$cur" | jq -r '.allowed_users // empty')
+  if [ -z "$allowed_users" ]; then
+    # If you didn't ask to clean the old ones, we'll inherit the old ones for the MERGE script.
+    if [ "${u_delete_prev_allowed,,}" != "true" ]; then
+      allowed_users=$(echo "$cur" | jq -r '.allowed_users // empty')
+    fi
+      # If you asked to clean (true), we leave allowed_users empty,
+      # to collect only the owner further.
+  fi
+
 
   # Validation of totals
   [ -z "$share_path" ]  && error "share_path unresolved"
   [ -z "$access_type" ] && error "access_type unresolved"
   if [ "$access_type" != "guest" ]; then
     [ -z "$access_user" ] && error "access_user is required for non-guest share"
+  fi
+
+
+  # Checking what was in the config
+  local cur_owner cur_allowed
+  cur_owner=$(echo "$cur" | jq -r '.access_user // empty')
+  cur_allowed=$(echo "$cur" | jq -r '.allowed_users // empty')
+
+  # Normalize the lists
+  local old_allowed_clean new_users_clean
+  old_allowed_clean=$(printf '%s\n' "$cur_allowed" | csv_to_lines | awk -v own="$cur_owner" '$0 != own')
+  new_users_clean=$(printf '%s\n' "${allowed_users:-}" | csv_to_lines | awk -v own="$access_user" '$0 != own')
+
+  # delete_prev_allowed=true  -> REPLACE (owner + new)
+  # delete_prev_allowed=false -> MERGE   (owner + old + new)
+  local merged
+  if [ "${u_delete_prev_allowed,,}" = "true" ]; then
+    merged="$new_users_clean"
+  else
+    merged=$( { printf '%s\n' "$old_allowed_clean"; printf '%s\n' "$new_users_clean"; } | csv_to_lines )
+  fi
+
+  # Final valid users: the owner first, then the unique others
+  local final_allowed=""
+  if [ "$access_type" != "guest" ]; then
+    if [ -n "$merged" ]; then
+      final_allowed=$( { printf '%s\n' "$access_user"; printf '%s\n' "$merged"; } | csv_to_lines | join_csv )
+    else
+      final_allowed="$access_user"
+    fi
   fi
 
   # Re-creating the section 
@@ -417,14 +472,6 @@ update_share() {
     user_group=$(id -gn "$access_user")
     chown -R "$access_user":"$user_group" "$share_path"
     chmod 2770 "$share_path"
-  fi
-
-  local valid_users
-  if [ "$access_type" = "guest" ]; then
-    valid_users=""
-  else
-    valid_users="$access_user"
-    [ -n "$allowed_users" ] && valid_users="$access_user,$allowed_users"
   fi
 
   conf="/etc/samba/smb.conf"
@@ -449,7 +496,7 @@ update_share() {
     else
       echo "   writable = $( [ "$access_type" = "rw" ] && echo yes || echo no )"
       echo "   guest ok = no"
-      echo "   valid users = $valid_users"
+      echo "   valid users = $final_allowed"
     fi
   } >> /etc/samba/smb.conf
 
@@ -458,6 +505,7 @@ update_share() {
 
   local shares_json
   shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
+
   echo "{
     \"status\": \"updated\",
     \"shares\": $shares_json,
@@ -801,6 +849,12 @@ u_share_path=$(echo "$input" | jq -r '.update.share_path // empty')
 u_access_user=$(echo "$input" | jq -r '.update.access_user // empty')
 u_access_type=$(echo "$input" | jq -r '.update.access_type // empty')
 u_allowed_users=$(echo "$input" | jq -r '.update.allowed_users // empty')
+u_delete_prev_allowed=$(echo "$input" | jq -r '.update.delete_prev_allowed // empty')
+case "${u_delete_prev_allowed,,}" in
+  true|1|yes|on) u_delete_prev_allowed=true ;;
+  *)             u_delete_prev_allowed=false ;;
+esac
+
 
 # DELETE
 d_share_name=$(echo "$input" | jq -r '.delete.share_name // empty')
@@ -819,7 +873,7 @@ case "$operation" in
 
   update)
     [ -z "$u_share_name" ] && error "update.share_name is required"
-    update_share "$u_share_name" "$u_share_path" "$u_access_user" "$u_access_type" "$u_allowed_users"
+    update_share "$u_share_name" "$u_share_path" "$u_access_user" "$u_access_type" "$u_allowed_users" "$u_delete_prev_allowed"
     ;;
 
   delete)
