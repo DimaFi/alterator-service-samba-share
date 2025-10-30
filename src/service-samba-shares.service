@@ -179,6 +179,14 @@ comment.en = "Comma-separated list of users allowed to access this share"
 comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
 
+[parameters.update.properties.delete_prev_allowed]
+display_name.en = "Delete previous allowed users"
+display_name.ru = "Удалить прежних разрешённых"
+comment.en = "If enabled, replace previous allowed users with the new list. If disabled, merge new users with existing."
+comment.ru = "Если включено — заменить прежних разрешённых новым списком. Если выключено — добавить новых к существующим."
+type = "boolean"
+default = false
+
 
 # -------- DELETE section ----------
 [parameters.delete]
