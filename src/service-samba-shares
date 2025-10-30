@@ -427,10 +427,19 @@ update_share() {
     [ -n "$allowed_users" ] && valid_users="$access_user,$allowed_users"
   fi
 
-  tail -c1 /etc/samba/smb.conf | read -r _ || echo >> /etc/samba/smb.conf
+  conf="/etc/samba/smb.conf"
+
+  # if the file is not empty and the last byte is != '\n' (0a), add a newline
+  if [ -s "$conf" ] && [ "$(tail -c1 -- "$conf" | od -An -t x1 | tr -d ' ')" != "0a" ]; then
+    echo >> "$conf"
+  fi
+
+  # if the last row is NOT empty, add one empty row.
+  if [ -s "$conf" ] && [ -n "$(tail -n1 -- "$conf")" ]; then
+    echo >> "$conf"
+  fi
 
   {
-    echo
     echo "[$share_name]"
     echo "   path = $share_path"
     echo "   browsable = yes"
