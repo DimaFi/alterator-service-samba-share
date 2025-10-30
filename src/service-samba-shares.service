@@ -171,9 +171,6 @@ display_name.ru = "Только чтение"
 [parameters.update.properties.access_type.values.rw]
 display_name.en = "Read/Write"
 display_name.ru = "Чтение и запись"
-[parameters.update.properties.access_type.values.guest]
-display_name.en = "Guest"
-display_name.ru = "Гостевой доступ"
 
 [parameters.update.properties.allowed_users]
 display_name.en = "New Allowed Users (comma-separated)"
@@ -181,6 +178,7 @@ display_name.ru = "Новые разрешённые пользователи (�
 comment.en = "Comma-separated list of users allowed to access this share"
 comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
+
 
 # -------- DELETE section ----------
 [parameters.delete]
