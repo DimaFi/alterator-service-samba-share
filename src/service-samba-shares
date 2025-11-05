@@ -227,7 +227,7 @@ join_csv() {
 
 
 
-# ======= FUNC FOR ALL ACTION =======
+# ---- Function for all action ----
 
 create_share() {
   local share_name="$1"
@@ -536,23 +536,44 @@ deploy_samba_share() {
     alterator-announce "samba_shares" "deployed" || true
   fi
 
-  echo '{
-    "status": "deployed",
-    "state": "deployed",
-    "deployed": true,
-    "started": true,
-    "services": {
-      "smb": "active",
-      "nmb": "active"
+  echo "{
+    \"status\": \"deployed\",
+    \"state\": \"deployed\",
+    \"deployed\": true,
+    \"started\": true,
+    \"services\": {
+      \"smb\": \"active\",
+      \"nmb\": \"active\"
     },
-    "message": {
-      "ru": "Samba успешно развернут. Теперь вы можете предоставить общий доступ к папкам через меню «Настройка» в alt-services.",
-      "en": "Samba successfully deployed. You can now share folders through the 'Settings' menu in alt-services."
+    \"message\": {
+      \"ru\": \"Samba успешно развернут. Теперь вы можете предоставить общий доступ к папкам через меню «Настройка» в alt-services.\",
+      \"en\": \"Samba successfully deployed. You can now share folders through the 'Settings' menu in alt-services.\"
     }
-  }'
+  }"
 }
 
 undeploy_samba_share() {
+  local ts 
+  local bname 
+  local bjson 
+  local bstatus 
+  local bcfg 
+  local bdata
+  
+  ts=$(date '+%Y%m%d-%H%M%S')
+  bname="auto-undeploy-$ts"
+  # intercepting the backup_all output
+  if bjson=$(backup_all "$bname" 2>>"$LOG_FILE"); then
+    if command -v jq >/dev/null 2>&1; then
+      bstatus=$(echo "$bjson" | jq -r '.status // empty')
+      bcfg=$(echo "$bjson" | jq -r '.config // empty')
+      bdata=$(echo "$bjson" | jq -r '.data // empty')
+    fi
+    log "Auto-backup before undeploy ok: name=$bname status=${bstatus:-unknown} cfg=${bcfg:-} data=${bdata:-}"
+  else
+    log "Auto-backup before undeploy FAILED: name=$bname"
+  fi
+
   log "Executing: systemctl stop smb.service"
   if ! timeout 15 systemctl stop smb.service >> "$LOG_FILE" 2>&1; then
     error "Failed to execute stop for smb.service"
@@ -580,22 +601,32 @@ undeploy_samba_share() {
     log "Original smb.conf not found, restore skipped"
   fi
 
-  echo '{
-    "status": "undeployed",
-    "deployed": true,
-    "started": true,
-    "message": {
-      "ru": "Samba отключен, smb.conf восстановлен",
-      "en": "Samba disabled, smb.conf restored"
+
+  echo "{
+    \"status\": \"undeployed\",
+    \"deployed\": false,
+    \"started\": false,
+    \"services\": { \"smb\": \"disabled\", \"nmb\": \"disabled\" },
+    \"auto_backup\": {
+      \"name\": \"${bname}\",
+      \"status\": \"${bstatus:-unknown}\",
+      \"config\": \"${bcfg:-null}\",
+      \"data\": ${bdata:+\"$bdata\"}
+    },
+    \"message\": {
+      \"ru\": \"Samba отключен, smb.conf восстановлен. Создан авто-бэкап перед undeploy.\",
+      \"en\": \"Samba disabled, smb.conf restored. Auto-backup created before undeploy.\"
     }
-  }'
+  }"
 }
 
 start_samba_share() {
-  log "Running: systemctl start smb.service"
+  log "Running: systemctl start smb.service && systemctl start nmb.service"
   if ! timeout 15 systemctl start smb.service >> "$LOG_FILE" 2>&1; then
-    error "Failed to run smb.service"
+    error "Failed to start smb.service"
   fi
+
+  timeout 15 systemctl start nmb.service >> "$LOG_FILE" 2>&1 || true
 
   local shares_json
   shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
@@ -610,10 +641,11 @@ start_samba_share() {
 }
 
 stop_samba_share() {
-  log "Running: systemctl stop smb.service"
-  if ! timeout 15 systemctl stop smb.service >> "$LOG_FILE" 2>&1; then
-    error "Failed to stop smb.service"
-  fi
+  log "Running: systemctl stop smb.service && systemctl stop nmb.service"
+  timeout 15 systemctl stop smb.service >> "$LOG_FILE" 2>&1 || error "Failed to stop smb.service"
+  timeout 15 systemctl stop nmb.service >> "$LOG_FILE" 2>&1 || true
+
+  sleep 0.3
 
   local shares_json
   shares_json=$(augment_shares_with_owner "$(get_samba_shares)")
@@ -621,11 +653,12 @@ stop_samba_share() {
     \"status\": \"stopped\",
     \"shares\": $shares_json,
     \"message\": {
-      \"ru\": \"Служба Samba остановлена\",
-      \"en\": \"Samba service stopped\"
+      \"ru\": \"Службы Samba остановлены\",
+      \"en\": \"Samba services stopped\"
     }
   }"
 }
+
 
 status_samba_share() {
   local smb_status 
@@ -663,6 +696,7 @@ status_samba_share() {
 
   exit $exit_code
 }
+
 
 backup_all() {
   local backup_name="$1"
@@ -863,7 +897,7 @@ backup_name=$(echo "$input" | jq -r '.backup_name // empty')
 
 case "$operation" in
   create)
-    # мminimal validation
+    # minimal validation
     [ -z "$c_share_name"  ] && error "create.share_name is required"
     [ -z "$c_share_path"  ] && error "create.share_path is required"
     [ -z "$c_access_user" ] && error "create.access_user is required"

@@ -11,7 +11,7 @@ comment.ru = "Для управления общими папками Samba"
 enable_force_deploy = true
 no_default_diag = true
 
-# -------- STATUS: список шар ----------
+# -------- STATUS: The list share ----------
 [parameters.shares]
 display_name.en = "Samba Shares"
 display_name.ru = "Общие папки Samba"
