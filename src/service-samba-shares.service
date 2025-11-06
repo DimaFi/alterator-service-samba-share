@@ -129,6 +129,14 @@ comment.en = "Comma-separated list of users allowed to access this share"
 comment.ru = "Список пользователей с доступом к этой расшаренной папке (через запятую)"
 type = "string"
 
+[parameters.create.properties.anonymous_enabled]
+display_name.en = "Anonymous access (guest)"
+display_name.ru = "Анонимный доступ (guest)"
+comment.en = "Allow access without a password (guest ok)."
+comment.ru = "Разрешить доступ без пароля (guest ok)."
+type = "boolean"
+default = false
+
 # -------- UPDATE section ----------
 [parameters.update]
 display_name.en = "Update existing share"
@@ -186,6 +194,13 @@ comment.en = "If enabled, replace previous allowed users with the new list. If d
 comment.ru = "Если включено — заменить прежних разрешённых новым списком. Если выключено — добавить новых к существующим."
 type = "boolean"
 default = false
+
+[parameters.update.properties.anonymous_enabled]
+display_name.en = "Anonymous access (guest)"
+display_name.ru = "Анонимный доступ (guest)"
+comment.en = "Turn on/off anonymous (guest) access for this share."
+comment.ru = "Включить/выключить анонимный (guest) доступ для этой шары."
+type = "boolean"
 
 
 # -------- DELETE section ----------
