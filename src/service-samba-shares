@@ -235,6 +235,7 @@ create_share() {
   local access_user="$3"
   local access_type="$4"
   local allowed_users="$5"
+  local anonymous_enabled="${6:-false}"
 
   log "Create shared folder: $share_name on path '$share_path'"
 
@@ -253,6 +254,7 @@ create_share() {
   # Creating a folder with quotes
   mkdir -p "$share_path" || error "Couldn't create folder '$share_path'"
   chown -R "$access_user:$user_group" "$share_path" || error "Couldn't set owner $access_user:$user_group"
+  
 
   # Folder permissions
   if [ "$access_type" == "rw" ]; then
@@ -261,8 +263,16 @@ create_share() {
     chmod 2750 "$share_path" || error "Couldn't set permissions 2750"
   fi
 
-  # Clearing ACLs
-  command -v setfacl >/dev/null 2>&1 && setfacl -b "$share_path" 2>/dev/null || true
+  # + anon FS: we issue nobody RW for the folder and by default for attachments
+  if [ "$anonymous_enabled" = "true" ]; then
+    command -v setfacl >/dev/null 2>&1 && {
+      setfacl -m u:nobody:rwx "$share_path" || true
+      setfacl -d -m u:nobody:rwx "$share_path" || true
+      setfacl -m m::rwx "$share_path" || true
+      setfacl -d -m m::rwx "$share_path" || true
+    }
+    chmod 2775 "$share_path" || true
+  fi
 
   # Checking the existence of a share in smb.conf
   grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] already exists"
@@ -277,6 +287,20 @@ create_share() {
     | awk '!seen[$0]++' \
     | paste -sd',' -)
 
+  # + anon: adding nobody to the valid users list
+  if [ "$anonymous_enabled" = "true" ]; then
+    valid_users=$(printf '%s\nnobody\n' "$valid_users" \
+      | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+      | awk '!seen[$0]++' | paste -sd',' -)
+  fi
+
+  local smb_writable
+  if [ "$anonymous_enabled" = "true" ]; then
+    smb_writable="yes"
+  else
+    smb_writable=$( [ "$access_type" = "rw" ] && echo yes || echo no )
+  fi
+
   # Add an entry to smb.conf
   local TEMP_FILE
   TEMP_FILE=$(mktemp)
@@ -289,8 +313,8 @@ create_share() {
 [$share_name]
    path = $share_path
    browsable = yes
-   writable = $( [ "$access_type" == "rw" ] && echo yes || echo no )
-   guest ok = no
+   writable = $smb_writable
+   guest ok = $( [ "$anonymous_enabled" = "true" ] && echo yes || echo no )
    valid users = $valid_users
 EOF
 
@@ -401,6 +425,7 @@ update_share() {
   local access_type="$4"
   local allowed_users="$5"
   local u_delete_prev_allowed="$6"
+  local anonymous_enabled="${7:-false}"
 
   [ -z "$share_name" ] && error "share_name is required for update"
 
@@ -425,8 +450,10 @@ update_share() {
   # Validation of totals
   [ -z "$share_path" ]  && error "share_path unresolved"
   [ -z "$access_type" ] && error "access_type unresolved"
-  if [ "$access_type" != "guest" ]; then
-    [ -z "$access_user" ] && error "access_user is required for non-guest share"
+
+  # If anonymous is disabled, the owner is required.
+  if [ "$anonymous_enabled" != "true" ] && [ -z "$access_user" ]; then
+    error "access_user is required when anonymous access is disabled"
   fi
 
 
@@ -459,20 +486,40 @@ update_share() {
     fi
   fi
 
-  # Re-creating the section 
-  remove_share_section "$share_name"
-
-  mkdir -p "$share_path"
-  if [ "$access_type" = "guest" ]; then
-    chmod 0777 "$share_path"
-    chown nobody:nogroup "$share_path"
-  else
-    id "$access_user" >/dev/null 2>&1 || useradd -m "$access_user"
-    local user_group
-    user_group=$(id -gn "$access_user")
-    chown -R "$access_user":"$user_group" "$share_path"
-    chmod 2770 "$share_path"
+  if [ "$anonymous_enabled" = "true" ]; then
+    if [ -n "$final_allowed" ]; then
+      final_allowed=$(printf '%s\nnobody\n' "$final_allowed" | csv_to_lines | join_csv)
+    else
+      final_allowed="nobody"
+    fi
   fi
+
+  # Re-creating the section 
+  mkdir -p "$share_path"
+  id "$access_user" >/dev/null 2>&1 || useradd -m "$access_user"
+  local user_group
+  user_group=$(id -gn "$access_user")
+  chown -R "$access_user":"$user_group" "$share_path"
+  chmod 2770 "$share_path"
+
+  # + anon FS: applying/removing rights for nobody
+  if [ "$anonymous_enabled" = "true" ]; then
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -m u:nobody:rwx "$share_path" || true
+      setfacl -d -m u:nobody:rwx "$share_path" || true
+      setfacl -m m::rwx "$share_path" || true
+      setfacl -d -m m::rwx "$share_path" || true
+    fi
+    chmod 2775 "$share_path" || true
+  else
+    if command -v setfacl >/dev/null 2>&1; then
+      setfacl -x u:nobody "$share_path" 2>/dev/null || true
+      setfacl -k "$share_path" 2>/dev/null || true
+    fi
+    chmod 2770 "$share_path" || true
+  fi
+
+  remove_share_section "$share_name"
 
   conf="/etc/samba/smb.conf"
 
@@ -486,18 +533,21 @@ update_share() {
     echo >> "$conf"
   fi
 
+  local smb_writable
+  if [ "$anonymous_enabled" = "true" ]; then
+    smb_writable="yes"
+  else
+    smb_writable=$( [ "$access_type" = "rw" ] && echo yes || echo no )
+  fi
+
+
   {
     echo "[$share_name]"
     echo "   path = $share_path"
     echo "   browsable = yes"
-    if [ "$access_type" = "guest" ]; then
-      echo "   writable = yes"
-      echo "   guest ok = yes"
-    else
-      echo "   writable = $( [ "$access_type" = "rw" ] && echo yes || echo no )"
-      echo "   guest ok = no"
-      echo "   valid users = $final_allowed"
-    fi
+    echo "   writable = $smb_writable"
+    echo "   guest ok = $( [ "$anonymous_enabled" = "true" ] && echo yes || echo no )"
+    [ -n "$final_allowed" ] && echo "   valid users = $final_allowed"
   } >> /etc/samba/smb.conf
 
   testparm -s /etc/samba/smb.conf >/dev/null || error "Configuration error in smb.conf"
@@ -876,6 +926,7 @@ c_share_path=$(echo "$input" | jq -r '.create.share_path // empty')
 c_access_user=$(echo "$input" | jq -r '.create.access_user // empty')
 c_access_type=$(echo "$input" | jq -r '.create.access_type // empty')
 c_allowed_users=$(echo "$input" | jq -r '.create.allowed_users // empty')
+c_anonymous_enabled=$(echo "$input" | jq -r '.create.anonymous_enabled // empty')
 
 # UPDATE
 u_share_name=$(echo "$input" | jq -r '.update.share_name // empty')
@@ -888,6 +939,7 @@ case "${u_delete_prev_allowed,,}" in
   true|1|yes|on) u_delete_prev_allowed=true ;;
   *)             u_delete_prev_allowed=false ;;
 esac
+u_anonymous_enabled=$(echo "$input" | jq -r '.update.anonymous_enabled // empty')
 
 
 # DELETE
@@ -895,19 +947,29 @@ d_share_name=$(echo "$input" | jq -r '.delete.share_name // empty')
 
 backup_name=$(echo "$input" | jq -r '.backup_name // empty')
 
+
+
+to_bool() {
+  case "${1,,}" in
+    true|1|yes|on) echo true ;;
+    *)             echo false ;;
+  esac
+}
+c_anonymous_enabled=$(to_bool "$c_anonymous_enabled")
+u_anonymous_enabled=$(to_bool "$u_anonymous_enabled")
+
 case "$operation" in
   create)
-    # minimal validation
     [ -z "$c_share_name"  ] && error "create.share_name is required"
     [ -z "$c_share_path"  ] && error "create.share_path is required"
     [ -z "$c_access_user" ] && error "create.access_user is required"
     [ -z "$c_access_type" ] && error "create.access_type is required"
-    create_share "$c_share_name" "$c_share_path" "$c_access_user" "$c_access_type" "$c_allowed_users"
+    create_share "$c_share_name" "$c_share_path" "$c_access_user" "$c_access_type" "$c_allowed_users" "$c_anonymous_enabled"
     ;;
 
   update)
     [ -z "$u_share_name" ] && error "update.share_name is required"
-    update_share "$u_share_name" "$u_share_path" "$u_access_user" "$u_access_type" "$u_allowed_users" "$u_delete_prev_allowed"
+    update_share "$u_share_name" "$u_share_path" "$u_access_user" "$u_access_type" "$u_allowed_users" "$u_delete_prev_allowed" "$u_anonymous_enabled"
     ;;
 
   delete)
