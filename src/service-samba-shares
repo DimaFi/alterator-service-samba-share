@@ -215,19 +215,34 @@ remove_share_section() {
 }
 
 csv_to_lines() {
-  tr ',' '\n' \
+  # we cut both by commas and spaces,
+  # remove the empty and duplicates (ignore the case)
+  tr ', ' '\n' \
   | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
   | sed '/^$/d' \
-  | awk '!seen[$0]++'
+  | awk 'BEGIN{IGNORECASE=1}!seen[tolower($0)]++'
 }
 
 join_csv() {
   paste -sd',' -
 }
 
+strip_nobody() {
+  # input is a CSV string, output is a CSV without nobody and duplicates
+  printf '%s\n' "$1" \
+  | tr ',' '\n' \
+  | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
+  | awk 'BEGIN{IGNORECASE=1}
+         {
+           u = tolower($0)
+           if (u == "" || u == "nobody") next  # пропускаем пустое и nobody
+           if (!seen[u]++) print               # убираем дубли
+         }' \
+  | paste -sd',' -
+}
 
 
-# ---- Function for all action ----
+# --------------------------------------------
 
 create_share() {
   local share_name="$1"
@@ -492,6 +507,11 @@ update_share() {
     else
       final_allowed="nobody"
     fi
+  fi
+
+  # If anonymous access is disabled, we delete nobody from final_allowed
+  if [ "$anonymous_enabled" != "true" ] && [ -n "$final_allowed" ]; then
+    final_allowed=$(strip_nobody "$final_allowed")
   fi
 
   # Re-creating the section 
