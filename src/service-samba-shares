@@ -241,6 +241,45 @@ strip_nobody() {
   | paste -sd',' -
 }
 
+apply_fs_acl_for_valid_users() {
+  local path="$1"
+  local users_csv="$2"
+  local owner="$3"
+  local access_type="$4"
+
+  command -v setfacl >/dev/null 2>&1 || return 0
+
+  local perms
+  if [ "$access_type" = "rw" ]; then
+    perms="rwx"
+  else
+    perms="rx"
+  fi
+
+  local users
+  users=$(printf '%s\n' "$users_csv" | csv_to_lines)
+
+  # Demolishing all the old ACLs (both regular and default),
+  # to avoid accumulating garbage with every update
+  setfacl -b "$path" 2>/dev/null || true
+
+  # Mask — full access so that ACLs are not cut by the mask
+  setfacl -m m::rwx "$path" 2>/dev/null || true
+  setfacl -d -m m::rwx "$path" 2>/dev/null || true
+
+  # We give rights to everyone on the list, EXCEPT the owner
+  while IFS= read -r u; do
+    [ -z "$u" ] && continue
+    # The owner is managed by chmod (2750/2770), we do not touch the ACL for him
+    if [ "$u" = "$owner" ]; then
+      continue
+    fi
+    setfacl -m u:"$u":"$perms" "$path" 2>/dev/null || true
+    setfacl -d -m u:"$u":"$perms" "$path" 2>/dev/null || true
+  done <<< "$users"
+}
+
+
 
 # --------------------------------------------
 
@@ -278,17 +317,6 @@ create_share() {
     chmod 2750 "$share_path" || error "Couldn't set permissions 2750"
   fi
 
-  # + anon FS: we issue nobody RW for the folder and by default for attachments
-  if [ "$anonymous_enabled" = "true" ]; then
-    command -v setfacl >/dev/null 2>&1 && {
-      setfacl -m u:nobody:rwx "$share_path" || true
-      setfacl -d -m u:nobody:rwx "$share_path" || true
-      setfacl -m m::rwx "$share_path" || true
-      setfacl -d -m m::rwx "$share_path" || true
-    }
-    chmod 2775 "$share_path" || true
-  fi
-
   # Checking the existence of a share in smb.conf
   grep -q "^\[$share_name\]" /etc/samba/smb.conf && error "Shared folder [$share_name] already exists"
 
@@ -307,6 +335,13 @@ create_share() {
     valid_users=$(printf '%s\nnobody\n' "$valid_users" \
       | tr ',' '\n' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' \
       | awk '!seen[$0]++' | paste -sd',' -)
+  fi
+
+  apply_fs_acl_for_valid_users "$share_path" "$valid_users" "$access_user" "$access_type"
+
+  # With anonymous access, we make the directory 2775 so that the group can write and setgid is inherited
+  if [ "$anonymous_enabled" = "true" ]; then
+    chmod 2775 "$share_path" || true
   fi
 
   local smb_writable
@@ -520,24 +555,21 @@ update_share() {
   local user_group
   user_group=$(id -gn "$access_user")
   chown -R "$access_user":"$user_group" "$share_path"
-  chmod 2770 "$share_path"
-
-  # + anon FS: applying/removing rights for nobody
-  if [ "$anonymous_enabled" = "true" ]; then
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -m u:nobody:rwx "$share_path" || true
-      setfacl -d -m u:nobody:rwx "$share_path" || true
-      setfacl -m m::rwx "$share_path" || true
-      setfacl -d -m m::rwx "$share_path" || true
-    fi
-    chmod 2775 "$share_path" || true
-  else
-    if command -v setfacl >/dev/null 2>&1; then
-      setfacl -x u:nobody "$share_path" 2>/dev/null || true
-      setfacl -k "$share_path" 2>/dev/null || true
-    fi
+  # Basic folder rights depending on access_type / anonymity
+  if [ "$access_type" = "rw" ]; then
     chmod 2770 "$share_path" || true
+  else
+    chmod 2750 "$share_path" || true
   fi
+
+  if [ "$anonymous_enabled" = "true" ]; then
+    chmod 2775 "$share_path" || true
+  fi
+
+  # Distributing ACLs to everyone from final_allowed (except the owner),
+  # rights depend on access_type (ro → rx, rw → rwx)
+  apply_fs_acl_for_valid_users "$share_path" "$final_allowed" "$access_user" "$access_type"
+
 
   remove_share_section "$share_name"
 
@@ -927,7 +959,7 @@ restore_all() {
 
 
 
-# ========== MAIN SCRIPT ==========
+# ------------ MAIN SCRIPT ------------
 
 log "---Run script---"
 [ "$EUID" -ne 0 ] && error "Root required"
